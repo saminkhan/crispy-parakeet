@@ -1,0 +1,21 @@
+{
+  "gta_dir": "EDIT ME -- folder containing GTA5.exe, e.g. D:/SteamLibrary/steamapps/common/Grand Theft Auto V",
+  "output_dir": "EDIT ME -- where clips are written, e.g. /mnt/d/gtav_longtail/dataset",
+  "width": 1920,
+  "height": 1080,
+  "rate_hz": 30,
+  "clip_duration_s": 15.0,
+  "discard_lead_s": 2.0,
+  "target_clips": 0,
+  "max_hours": 0.0,
+  "clips_per_lifetime": 12,
+  "chaos": 0.8,
+  "variations": "counterfactual",
+  "deterministic_population": "auto",
+  "graphics": "high",
+  "video_crf": 16,
+  "keep_frames": false,
+  "host": "172.28.32.1",
+  "port": 8000,
+  "launch_command": "steam://rungameid/271590"
+}

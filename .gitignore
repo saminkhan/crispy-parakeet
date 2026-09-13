@@ -1,0 +1,35 @@
+opencv/
+eigen-3.3.7/
+boost_1_73_0/
+zeromq-4.3.3/
+cppzmq-4.7.1/
+libzmq-4.3.5/
+
+# --- capture pipeline ---
+# your own settings; capture.example.json is the template
+capture.json
+capture/__pycache__/
+**/__pycache__/
+*.pyc
+
+# Build artifacts and redistributables that are NOT needed to run the pipeline.
+# The longtail build excludes OpenCV entirely and links libzmq statically, and
+# ScriptHookV is downloaded by the user (see SETUP.md step 2) rather than vendored.
+DeepGTAV-PreSIL/DeepGTAV.sdf
+DeepGTAV-PreSIL/bin/Release/*.iobj
+DeepGTAV-PreSIL/bin/Release/*.ipdb
+DeepGTAV-PreSIL/bin/Release/*.exp
+DeepGTAV-PreSIL/bin/Release/opencv_world343.dll
+DeepGTAV-PreSIL/bin/Release/libzmq-*.dll
+DeepGTAV-PreSIL/bin/Release/libzmq-*.lib
+DeepGTAV-PreSIL/bin/Release/ScriptHookV.dll
+DeepGTAV-PreSIL/bin/Release/dinput8.dll
+DeepGTAV-PreSIL/bin/Release/xinput1_4.dll
+DeepGTAV-PreSIL/bin/Release/GTAVisionNative.*
+DeepGTAV-PreSIL/bin/Release/NativeTrainer.asi
+DeepGTAV-PreSIL/tmp/
+
+# ⚠ DRM circumvention. Not required: this pipeline drives a legitimately purchased
+# copy launched through its normal launcher, and the bypass was never used. Ignored
+# so it cannot be committed by accident.
+DeepGTAV-PreSIL/bin/Release/GTAVLauncherBypass.*
