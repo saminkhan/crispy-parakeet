@@ -224,6 +224,7 @@ edit the values in place, do not replace the whole file with just this:
 | `max_hours` | `0` | Stop after this many hours. `0` means no limit. |
 | `record_clip` | `true` | Save a Rockstar Editor `.clip` of every kept clip. See below. |
 | `make_mp4` | `false` | Also encode `clip.mp4` during the run. Off by default: render it later from the `.clip`. With this and `keep_frames` both off, no images are captured at all — see below. |
+| `clip_camera` | `"gameplay"` | Which camera the `.clip`'s own "Game Camera" track records. `"first_person"` is an unverified opt-in. |
 | `keep_frames` | `false` | Keep the raw JPEGs as well as the mp4. Uses ~4× the disk. |
 | `variations` | `[]` | Capture each scene several times with different behaviour. `"counterfactual"` gives the 2×2 grid described below, or list your own. `[]` is off. |
 | `launch_command` | Steam Legacy | How to start the game. Only change this if you do **not** own GTA V on Steam. |
@@ -275,6 +276,11 @@ Things worth knowing:
   `render_clip.py` copies it back when it needs the Editor to see it.
 - A `.clip` only replays on the **same game version with the same mods** it was
   recorded on. Keep this install around if you want to render later.
+- **What camera is in the `.clip`?** Not the capture camera. The game's recorder
+  stores its own *gameplay* camera — the chase camera that keeps following your
+  car underneath the mounted view the run renders — so a clip played in the
+  Editor shows third person by default. That is why rendering sets the camera at
+  playback time (Step 10) rather than trusting the recording.
 - Recording uses the Editor's *manual* mode (the one behind the F1 key): it starts
   at the first recorded frame and stops after the last, and a rejected clip is
   discarded before anything is written. The Editor refuses clips shorter than

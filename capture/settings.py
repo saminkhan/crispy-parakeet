@@ -554,6 +554,12 @@ class CaptureSettings:
     #: as a WSL path). Leave empty: it is found from the registry, next to
     #: settings.xml, exactly where the game puts it.
     clip_library_dir: str = ""
+    #: What camera the .clip's own "Game Camera" track carries. "gameplay" (default):
+    #: the chase camera the replay records anyway. "first_person": the gameplay
+    #: camera is put in first-person vehicle view for the run. ⚠ Opt-in and not
+    #: yet verified in the Editor; irrelevant when rendering with the plugin's
+    #: replay capture, which sets its own camera at playback.
+    clip_camera: str = "gameplay"
     max_hours: float = 0.0         # 0 = unlimited
     clips_per_lifetime: int = 12
     host: str = "172.28.32.1"      # WSL->Windows vEthernet address
@@ -784,6 +790,8 @@ class CaptureSettings:
         for name in ("record_clip", "make_mp4", "keep_frames"):
             if not isinstance(getattr(self, name), bool):
                 p.append("%s must be true or false, got %r" % (name, getattr(self, name)))
+        if str(self.clip_camera).lower() not in ("first_person", "gameplay"):
+            p.append('clip_camera must be "first_person" or "gameplay", got %r' % (self.clip_camera,))
         if not isinstance(self.clip_library_dir, str):
             p.append("clip_library_dir must be a path string or empty, got %r"
                      % (self.clip_library_dir,))
@@ -845,6 +853,7 @@ class CaptureSettings:
 
         d["record_clip"] = bool(self.record_clip)
         d["clip_library_dir"] = str(self.clip_library_dir or "")
+        d["clip_camera"] = str(self.clip_camera)
         # ★ Images are captured only if something will use them. With .clip as the
         #   deliverable and no mp4/frames wanted, the run is poses + .clip: no
         #   backbuffer reads, no time freeze, game time at wall time -- which is

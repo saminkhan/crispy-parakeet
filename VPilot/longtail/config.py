@@ -106,6 +106,12 @@ class CaptureConfig:
     #: The Editor refuses to save anything shorter than 3 s. Discard rather than
     #: let a short abort fail with a toast on screen.
     clip_min_seconds: float = 3.5
+    #: The camera the .clip records: "first_person" puts the gameplay camera into
+    #: first-person vehicle view for the whole run (the Editor's Game Camera then
+    #: replays the driver's view); "gameplay" leaves the chase camera the replay
+    #: records by default. ⚠ The stock Editor locks its free camera on first-person
+    #: recordings; REPlus lifts that.
+    clip_camera: str = "gameplay"
     #: How long to wait for the saved .clip to appear in the library.
     clip_save_wait_s: float = 12.0
 

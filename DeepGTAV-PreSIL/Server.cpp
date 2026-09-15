@@ -189,6 +189,9 @@ void Server::checkRecvMessage() {
 				rc.HasMember("b") ? rc["b"].GetFloat() : 0.0f,
 				rc.HasMember("frames") ? rc["frames"].GetInt() : 0);
 		}
+		else if (d.HasMember("SetGameplayCamView")) {
+			scenario.setGameplayCamView(d["SetGameplayCamView"]["mode"].GetInt());
+		}
 		else if (d.HasMember("SetCapturePause")) {
 			scenario.setCapturePause(d["SetCapturePause"]["enabled"].GetBool());
 		}

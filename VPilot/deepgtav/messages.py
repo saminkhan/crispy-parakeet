@@ -350,6 +350,50 @@ class ReplayControl:
         return json.dumps({'ReplayControl': self.__dict__})
 
 
+class SetGameplayCamView:
+    """Gameplay camera view mode, re-asserted every frame while a scenario runs.
+
+    The Rockstar Editor's "Game Camera" replays the GAMEPLAY camera's track, not
+    the scripted camera the capture renders through -- so a recording made with
+    the default chase camera plays back in third person. Mode 4 is first-person
+    vehicle view: the driver's view is what the .clip then carries.
+    (0/1/2 = third person near/mid/far, 4 = first person; -1 = leave alone.)
+    """
+
+    def __init__(self, mode=4):
+        self.mode = int(mode)
+
+    def to_json(self):
+        return json.dumps({'SetGameplayCamView': self.__dict__})
+
+
+class ReplayCapture:
+    """Arm the plugin's replay streamer BEFORE opening the Rockstar Editor.
+
+    While the Editor is up the plugin's script thread is suspended, but a hook
+    on the game's replay camera update keeps running. Armed, a worker thread
+    serves a second PAIR socket on `port`. Every message it sends is a frame
+    (BGR, 4-byte-aligned rows, width x height; empty if no grab) followed by a
+    JSON string with the replay camera (position, right/forward/up, fov), the
+    replay clock and mode. Commands go the other way as one JSON string:
+      {"mode": "stream"|"step"}          stream: every replay frame; step: only on grab
+      {"seek": ms}                        CReplayMgrInternal::JumpTo (forced)
+      {"speed": f}                        cursor speed: 1 normal, 0 paused
+      {"camera": {"enabled": bool, "position": [x,y,z], "forward": [..],
+                  "up": [..], "fov": deg}}  override the replay camera
+      {"grab": true}                      (step mode) apply, wait a frame, reply
+    """
+
+    def __init__(self, enabled=True, port=8001, width=1920, height=1080):
+        self.enabled = bool(enabled)
+        self.port = int(port)
+        self.width = int(width)
+        self.height = int(height)
+
+    def to_json(self):
+        return json.dumps({'ReplayCapture': self.__dict__})
+
+
 class SetCapturePause:
     """Whether the plugin wraps each frame capture in SET_GAME_PAUSED.
 

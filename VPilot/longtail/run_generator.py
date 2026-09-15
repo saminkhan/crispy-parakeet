@@ -37,8 +37,8 @@ for _p in (os.path.dirname(_HERE), _HERE):
         sys.path.insert(0, _p)
 
 from deepgtav.client import Client
-from deepgtav.messages import (Dataset, Scenario as GtaScenario, SetCapturePause, Start,
-                               Stop, StartRecording)
+from deepgtav.messages import (Dataset, Scenario as GtaScenario, SetCapturePause,
+                               SetGameplayCamView, Start, Stop, StartRecording)
 
 # ⚠ NOT `from longtail import writer` above the sys.path repair: that only
 # worked when the caller had already put VPilot on PYTHONPATH, and died with
@@ -431,6 +431,11 @@ def main():
     # recording on, the plugin captures under SET_TIME_SCALE(0) alone.
     if getattr(cfg, "record_clip", False):
         client.sendMessage(SetCapturePause(enabled=False))
+        if str(getattr(cfg, "clip_camera", "first_person")).lower() == "first_person":
+            # The replay records the GAMEPLAY camera, not our script cam: make
+            # that the driver's view so the .clip plays back the way it was seen.
+            client.sendMessage(SetGameplayCamView(mode=4))
+            print("[longtail] rockstar editor recording: gameplay camera set to first person")
         print("[longtail] rockstar editor recording ON: capture pause disabled, "
               "library %s" % (getattr(cfg, "clip_library_dir", "") or "(auto)"))
 

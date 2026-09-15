@@ -167,6 +167,12 @@ public:
 	void taskVehicleDriveToCoord(int actorId, float x, float y, float z, float speed, int drivingMode);
 	void setEgoDrivingMode(int drivingMode, float setSpeed);
 	void setClipRecording(const std::string& action, int mode, int control, int group, int frames);
+	// [rockstar] Gameplay camera view mode the replay records (-1 = leave alone).
+	// The Editor's "Game Camera" is the gameplay director's frame, not our script
+	// cam, so a first-person recording is how the replay keeps the driver's view.
+	void setGameplayCamView(int mode);
+	void applyGameplayCamView();
+	int  m_gameplayCamView = -1;
 	void applyPendingControl();
 	int  m_pendingControlGroup = 2;
 	void setCapturePause(bool enabled) { exporter.setPauseForCapture(enabled); }

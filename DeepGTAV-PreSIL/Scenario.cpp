@@ -367,6 +367,7 @@ void Scenario::buildScenario() {
 	log("[longtail] bs: teleport done, seating ped", true);
 	PED::SET_PED_INTO_VEHICLE(ped, m_ownVehicle, -1);
 	ENTITY::SET_ENTITY_HEADING(m_ownVehicle, heading);
+	applyGameplayCamView();
 	VEHICLE::SET_VEHICLE_ON_GROUND_PROPERLY(m_ownVehicle);
 	{
 		float got = ENTITY::GET_ENTITY_HEADING(m_ownVehicle);
@@ -474,6 +475,7 @@ void Scenario::config(const Value& sc, const Value& dc) {
 
 void Scenario::run() {
 	applyPendingControl();
+	if (running) applyGameplayCamView();
 	if (running) {
 
 		// [longtail] Hard invariants first, every frame, before anything else can
@@ -1568,6 +1570,29 @@ void Scenario::setEgoDrivingMode(int drivingMode, float setSpeed) {
 // has seen SET_GAME_PAUSED -- "Clips must be at least 3 seconds long",
 // regardless of length. See m_pauseForCapture in DataExport: with recording
 // on, the capture cycle freezes time with SET_TIME_SCALE(0) alone.
+// [rockstar] The replay recorder stores the GAMEPLAY camera's frame every frame
+// -- the chase camera that keeps following the player underneath our scripted
+// camera -- so a clip played back in the Editor shows the third-person view no
+// matter what the capture rendered. Putting the gameplay camera into first-
+// person vehicle view (mode 4) makes the recorded track the driver's view. It is
+// a sticky per-vehicle-class preference, but a new vehicle per clip and the
+// engine's own resets make re-asserting it per frame the only reliable way.
+// Heading/pitch are zeroed so the recorded view looks straight ahead.
+void Scenario::setGameplayCamView(int mode) {
+	m_gameplayCamView = mode;
+	log("Scenario::setGameplayCamView " + std::to_string(mode), true);
+	applyGameplayCamView();
+}
+
+void Scenario::applyGameplayCamView() {
+	if (m_gameplayCamView < 0) return;
+	if (!ENTITY::DOES_ENTITY_EXIST(ped) || !PED::IS_PED_IN_ANY_VEHICLE(ped, FALSE)) return;
+	if (CAM::GET_FOLLOW_VEHICLE_CAM_VIEW_MODE() != m_gameplayCamView)
+		CAM::SET_FOLLOW_VEHICLE_CAM_VIEW_MODE(m_gameplayCamView);
+	CAM::SET_GAMEPLAY_CAM_RELATIVE_HEADING(0.0f);
+	CAM::SET_GAMEPLAY_CAM_RELATIVE_PITCH(0.0f, 1.0f);
+}
+
 void Scenario::setClipRecording(const std::string& action, int mode, int control, int group, int frames) {
 	log("Scenario::setClipRecording " + action + " mode=" + std::to_string(mode) +
 	    (control >= 0 ? " control=" + std::to_string(control) + " group=" + std::to_string(group) : ""));

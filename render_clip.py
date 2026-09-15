@@ -35,18 +35,20 @@ the capture plugin can neither play a clip nor read anything while one plays.
 tool.) The manual part, once per render:
 
   Rockstar Editor -> Create New Project -> Add Clip -> pick the staged clip ->
-  Edit Clip -> Camera. For the ORIGINAL view leave the camera on "Game Camera"
-  (⚠ that is the recorded gameplay camera, NOT the capture mount -- see below).
-  For an offset view: Free Camera -> attach to the ego vehicle -> set the
+  Edit Clip -> Camera -> Free Camera -> attach it to the ego vehicle and set the
   position/rotation offsets -> Save -> Export (choose resolution and framerate).
 
---camera is dx,dy,dz[,droll,dpitch,dyaw]: metres right/forward/up and degrees,
-ADDED to the recorded capture mount, in the camera's own frame. Give collect the
-same offset you set in the Editor. ⚠ The Editor's attach offsets are expressed
-relative to the vehicle, ours relative to the recorded camera; a one-time
-calibration render (same clip, known offset, compare) is how to reconcile the
-two conventions on your build -- collect reports the numbers it used so that
-comparison is possible.
+⚠ The poses collect writes describe the CAPTURE MOUNT (the seat-bone camera the
+run recorded with), plus --camera. They only match the exported pixels if the
+Editor's camera reproduces that mount -- which is why the camera has to be a
+Free Camera attached to the ego, not "Game Camera": the game camera in a .clip
+is the third-person gameplay view the replay recorded, whose pose this tool
+cannot produce. --camera is dx,dy,dz[,droll,dpitch,dyaw]: metres right/forward/up
+and degrees, ADDED to the mount, in the camera's own frame. The Editor's attach
+offsets are expressed relative to the vehicle, ours relative to the recorded
+camera; a one-time calibration render (same clip, known Editor offsets, compare
+against the original poses) is how to find the fixed difference on your build --
+collect reports every number it used so that comparison is possible.
 """
 
 import argparse
@@ -66,6 +68,21 @@ for _p in (_HERE, os.path.join(_HERE, "VPilot"), os.path.join(_HERE, "VPilot", "
 
 from capture import game as game_mod                      # noqa: E402
 from capture.settings import CaptureSettings              # noqa: E402
+
+
+def _client():
+    """Import the ZeroMQ client and messages. ⚠ deepgtav.messages pulls in
+    utils.PedNamesAndHashes, which opens utils/pedsToHashes.txt relative to the
+    CURRENT DIRECTORY -- an upstream quirk the runner sidesteps by running the
+    generator from VPilot/. Do the import with that cwd, then put it back."""
+    cwd = os.getcwd()
+    os.chdir(os.path.join(_HERE, "VPilot"))
+    try:
+        from deepgtav.client import Client
+        from deepgtav.messages import ReplayControl
+        return Client, ReplayControl
+    finally:
+        os.chdir(cwd)
 
 
 # ---------------------------------------------------------------------------
@@ -159,8 +176,7 @@ def cmd_stage(args):
     g.stop()
     g.ensure_running(force=True)
     if not args.no_editor:
-        from deepgtav.client import Client
-        from deepgtav.messages import ReplayControl
+        Client, ReplayControl = _client()
         c = Client(ip=args.host, port=args.port, recv_timeout_ms=5000)
         c.sendMessage(ReplayControl(action="editor"))
         c.close()
