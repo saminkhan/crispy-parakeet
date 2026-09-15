@@ -555,6 +555,56 @@ timestamps.
 
 ---
 
+## Step 10 — Render a video from a `.clip`
+
+Every kept clip folder holds `clip.clip`. To turn one into a video (at any
+resolution, from the original camera or a different one), the game's Rockstar
+Editor does the rendering and `render_clip.py` does everything around it.
+
+**1. Stage.** Put the clip where the Editor looks, restart the game (the Editor
+builds its clip list when the game boots — a file copied in later is not seen),
+and open the Editor:
+
+```bash
+python3 render_clip.py stage --gta-dir "D:/SteamLibrary/steamapps/common/Grand Theft Auto V" \
+    D:/gtav_longtail/dataset/clips/<clip id>/clip.clip
+```
+
+**2. In the Editor** (this part is you, in the game window): *Create New
+Project → Add Clip* and pick the staged clip → *Edit Clip → Camera*. For the
+recorded view leave *Game Camera*. For a different view choose *Free Camera*,
+attach it to your car and set the offsets. *Save*, then *Export* and pick the
+resolution and frame rate. The video lands in
+`Documents\Rockstar Games\GTA V\videos\rendered`.
+
+⚠ Why a person: while the Rockstar Editor is open, the game suspends every
+ScriptHookV script, the capture plugin included. It cannot press the buttons for
+you, play the clip, or read the camera during playback. (Hooking the game's own
+functions, the way the REPlus mod does, gets around this; that is not part of
+this pipeline yet.)
+
+**3. Collect.** Copy the export next to the clip and write matching poses:
+
+```bash
+python3 render_clip.py collect --clip D:/gtav_longtail/dataset/clips/<clip id>/clip.clip \
+    --out D:/gtav_longtail/renders/<clip id>-left --camera 0,-0.4,0.1
+```
+
+`--out` receives `clip.mp4`, `poses.jsonl` (one line per video frame — the
+original pose track resampled to the export's frame times, with the camera
+offset applied) and `render.json` (what was rendered from what, with what
+offset). `--camera` is the offset you set in the Editor: metres right, forward
+and up, then degrees roll, pitch, yaw, relative to the recorded camera. Leave it
+out for the original view.
+
+⚠ The Editor measures its offsets from the vehicle; the pipeline measures from
+the recorded camera mount. Render the same clip once with a known offset,
+compare the two `poses.jsonl` files, and you have the fixed difference for your
+build — `render.json` records every number used so that comparison is easy.
+
+When you are done, `python3 render_clip.py unstage` clears the staged copies out
+of the Editor's library.
+
 ## If something goes wrong
 
 **Nothing happens for several minutes after starting.**

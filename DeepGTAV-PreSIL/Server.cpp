@@ -182,21 +182,12 @@ void Server::checkRecvMessage() {
 			const Value& ed = d["SetEgoDrivingMode"];
 			scenario.setEgoDrivingMode(ed["drivingMode"].GetInt(), ed["setSpeed"].GetFloat());
 		}
-		else if (d.HasMember("StartRender")) {
-			printf("StartRender received\n");
-			scenario.startRender(d["StartRender"]["dataset"]);
-			clientStarted = true;
-		}
 		else if (d.HasMember("ReplayControl")) {
 			const Value& rc = d["ReplayControl"];
 			scenario.replayControl(std::string(rc["action"].GetString()),
 				rc.HasMember("a") ? rc["a"].GetFloat() : 0.0f,
 				rc.HasMember("b") ? rc["b"].GetFloat() : 0.0f,
 				rc.HasMember("frames") ? rc["frames"].GetInt() : 0);
-		}
-		else if (d.HasMember("SetRenderTarget")) {
-			const Value& rt = d["SetRenderTarget"];
-			scenario.setRenderTarget(rt["x"].GetFloat(), rt["y"].GetFloat(), rt["z"].GetFloat(), rt["radius"].GetFloat());
 		}
 		else if (d.HasMember("SetCapturePause")) {
 			scenario.setCapturePause(d["SetCapturePause"]["enabled"].GetBool());

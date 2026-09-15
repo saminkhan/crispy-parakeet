@@ -474,7 +474,6 @@ void Scenario::config(const Value& sc, const Value& dc) {
 
 void Scenario::run() {
 	applyPendingControl();
-	if (running && m_renderMode) { runRenderMode(); return; }
 	if (running) {
 
 		// [longtail] Hard invariants first, every frame, before anything else can
@@ -528,9 +527,6 @@ void Scenario::run() {
 void Scenario::stop() {
 	if (!running) return;
 	running = false;
-	m_renderMode = false;
-	exporter.setRenderMode(false);
-	exporter.setRenderTarget(0);
 	CAM::DESTROY_ALL_CAMS(TRUE);
 	CAM::RENDER_SCRIPT_CAMS(FALSE, TRUE, 500, FALSE, FALSE);
 	AI::CLEAR_PED_TASKS(ped);
@@ -1607,33 +1603,16 @@ void Scenario::setClipRecording(const std::string& action, int mode, int control
 
 
 // ============================================================================
-// [rockstar] Render mode: capture a Rockstar Editor replay
+// [rockstar] Rockstar Editor control
 // ============================================================================
 //
-// There is no native that plays a given .clip. What exists: ACTIVATE_ROCKSTAR_EDITOR
-// (0x49DA8145672B2725) opens the Editor's frontend, and frontend controls can be
-// injected per frame, so the client drives the Editor's menus blind, looking at
-// the frames it gets back. Once a replay is playing, this mode keeps the capture
-// loop alive with no scenario: the camera rides a render TARGET -- the replayed
-// ego, found as the closest vehicle to where the original poses.jsonl began --
-// with the same seat mount and the user's offset, or, with no target, whatever
-// camera the replay is showing.
-
-void Scenario::startRender(const Value& dc) {
-	log("Scenario::startRender", true);
-	parseDatasetConfig(dc, true);
-	m_renderMode = true;
-	exporter.setRenderMode(true);
-	exporter.setRenderTarget(0);
-	m_targetWanted = false;
-	m_pendingControl = -1;
-	// A cam of our own exists so a target can be followed; until one is locked
-	// the replay's camera renders (script cams off).
-	exporter.initialize();
-	CAM::RENDER_SCRIPT_CAMS(FALSE, FALSE, 0, TRUE, TRUE);
-	running = true;
-	lastSafetyCheck = std::clock();
-}
+// ⚠ Measured: ScriptHookV scripts are SUSPENDED for as long as the Rockstar
+// Editor is active -- its menus and its playback alike. Not one line of this
+// plugin's per-frame log appears between ACTIVATE_ROCKSTAR_EDITOR and the
+// return to gameplay. So nothing here can capture a replay, export a pose, move
+// a camera or inject an input while the Editor is up; a "render mode" that
+// tried was removed. What remains is useful around the Editor: opening it for
+// the user (render_clip.py stage), and fading back in afterwards.
 
 void Scenario::replayControl(const std::string& action, float a, float b, int frames) {
 	log("Scenario::replayControl " + action + " a=" + std::to_string(a) + " b=" + std::to_string(b) +
@@ -1644,29 +1623,11 @@ void Scenario::replayControl(const std::string& action, float a, float b, int fr
 		UNK2::_0x3353D13F09307691();                          // RESET_EDITOR_VALUES
 	} else if (action == "fadein") {
 		CAM::DO_SCREEN_FADE_IN((int)a);
-	} else if (action == "input") {
-		// Held for `frames` frames from runRenderMode(): frontend menus read
-		// just-pressed edges, so a single-frame set is often missed.
-		m_pendingControl = (int)a;
-		m_pendingControlGroup = 2;
-		m_pendingControlValue = b;
-		m_pendingControlFrames = frames > 0 ? frames : 3;
-	} else if (action == "scriptcams") {
-		CAM::RENDER_SCRIPT_CAMS(a > 0.5f ? TRUE : FALSE, FALSE, 0, TRUE, TRUE);
-	} else if (action == "timescale") {
-		GAMEPLAY::SET_TIME_SCALE(a);
-		exporter.setResumeTimeScale(a);
 	} else {
 		log("[longtail] replay: unknown action " + action, true);
 	}
 }
 
-void Scenario::setRenderTarget(float x, float y, float z, float radius) {
-	m_targetX = x; m_targetY = y; m_targetZ = z; m_targetRadius = radius;
-	m_targetWanted = radius > 0.0f;
-	if (!m_targetWanted) { exporter.setRenderTarget(0); CAM::RENDER_SCRIPT_CAMS(FALSE, FALSE, 0, TRUE, TRUE); }
-	log("Scenario::setRenderTarget wanted=" + std::to_string(m_targetWanted), true);
-}
 
 void Scenario::applyPendingControl() {
 	// Injected input, held for the requested number of frames. ⚠ Runs even when
@@ -1677,24 +1638,6 @@ void Scenario::applyPendingControl() {
 	}
 }
 
-void Scenario::runRenderMode() {
-	// Lock onto the replayed ego once a vehicle shows up near the requested point.
-	if (m_targetWanted && !exporter.renderTarget()) {
-		Vehicle v = VEHICLE::GET_CLOSEST_VEHICLE(m_targetX, m_targetY, m_targetZ, m_targetRadius, 0, 70);
-		if (v && ENTITY::DOES_ENTITY_EXIST(v)) {
-			exporter.setRenderTarget(v);
-			CAM::RENDER_SCRIPT_CAMS(TRUE, FALSE, 0, TRUE, TRUE);
-			log("[longtail] render: locked target vehicle " + std::to_string(v), true);
-		}
-	}
-	// A target that vanished (replay ended / scrubbed) is released; the loop
-	// falls back to the replay camera rather than a stale handle.
-	if (exporter.renderTarget() && !ENTITY::DOES_ENTITY_EXIST(exporter.renderTarget())) {
-		exporter.setRenderTarget(0);
-		CAM::RENDER_SCRIPT_CAMS(FALSE, FALSE, 0, TRUE, TRUE);
-		log("[longtail] render: target vehicle gone", true);
-	}
-}
 
 
 // ============================================================================

@@ -170,17 +170,11 @@ public:
 	void applyPendingControl();
 	int  m_pendingControlGroup = 2;
 	void setCapturePause(bool enabled) { exporter.setPauseForCapture(enabled); }
-	// [rockstar] Replay capture ("render mode") -- see Scenario.cpp.
-	void startRender(const Value& dc);
+	// [rockstar] Rockstar Editor control (open it, fade back in) -- see Scenario.cpp.
 	void replayControl(const std::string& action, float a, float b, int frames);
-	void setRenderTarget(float x, float y, float z, float radius);
-	bool  m_renderMode = false;
-	int   m_pendingControl = -1;     // frontend control id being held, or -1
+	int   m_pendingControl = -1;     // control id being held by "press", or -1
 	float m_pendingControlValue = 0.0f;
 	int   m_pendingControlFrames = 0;
-	float m_targetX = 0, m_targetY = 0, m_targetZ = 0, m_targetRadius = 0;
-	bool  m_targetWanted = false;
-	void  runRenderMode();
 	bool resolveActor(int actorId, Vehicle& vehOut, Ped& pedOut);
 
 	// [longtail] ambient density + capture time scale

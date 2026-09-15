@@ -327,33 +327,17 @@ class SetEgoDrivingMode:
         return json.dumps({'SetEgoDrivingMode': self.__dict__})
 
 
-class StartRender:
-    """Start the capture loop in RENDER mode: no scenario, no ego of our own.
-
-    For re-rendering a Rockstar Editor .clip. The plugin keeps sending frames
-    and poses; the camera rides the render target once SetRenderTarget has
-    locked one, and until then it is whatever camera the replay shows.
-    `dataset` is the same Dataset message Start takes (frame size, rate...).
-    """
-
-    def __init__(self, dataset=None):
-        self.dataset = dataset if dataset is not None else Dataset()
-
-    def to_json(self):
-        return json.dumps({'StartRender': {'dataset': self.dataset.__dict__}})
-
-
 class ReplayControl:
-    """Drive the Rockstar Editor from outside.
+    """Open the Rockstar Editor for the user, and tidy up after it.
 
-    action  "editor"      ACTIVATE_ROCKSTAR_EDITOR -- opens the Editor frontend
-            "reset"       RESET_EDITOR_VALUES
-            "fadein"      DO_SCREEN_FADE_IN(a ms) -- needed after leaving the Editor
-            "input"       hold frontend control id `a` at value `b` for `frames`
-                          frames (group 2 / FRONTEND: ACCEPT=201 CANCEL=202
-                          UP=188 DOWN=187 LEFT=189 RIGHT=190 PAUSE=199 X=203 Y=204)
-            "scriptcams"  RENDER_SCRIPT_CAMS(a > 0.5)
-            "timescale"   SET_TIME_SCALE(a)
+    action  "editor"   ACTIVATE_ROCKSTAR_EDITOR -- opens the Editor frontend
+            "reset"    RESET_EDITOR_VALUES
+            "fadein"   DO_SCREEN_FADE_IN(a ms) -- needed after leaving the Editor
+
+    ⚠ ScriptHookV scripts are suspended for as long as the Editor is active
+    (menus and playback alike), so the plugin can do nothing while it is up:
+    no capture, no poses, no camera, no input. Everything the Editor does, a
+    person does in the Editor; render_clip.py wraps that.
     """
 
     def __init__(self, action="editor", a=0.0, b=0.0, frames=0):
@@ -364,18 +348,6 @@ class ReplayControl:
 
     def to_json(self):
         return json.dumps({'ReplayControl': self.__dict__})
-
-
-class SetRenderTarget:
-    """Lock the render camera onto the closest vehicle to (x, y, z) within
-    `radius` metres once one exists -- the replayed ego, located from where the
-    original poses.jsonl began. radius <= 0 releases the target (replay camera)."""
-
-    def __init__(self, x=0.0, y=0.0, z=0.0, radius=0.0):
-        self.x, self.y, self.z, self.radius = float(x), float(y), float(z), float(radius)
-
-    def to_json(self):
-        return json.dumps({'SetRenderTarget': self.__dict__})
 
 
 class SetCapturePause:

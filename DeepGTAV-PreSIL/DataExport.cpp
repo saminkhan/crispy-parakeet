@@ -268,8 +268,6 @@ void DataExport::buildJSONObject() {
 	d.AddMember("ReplayScriptRefs", 0, allocator);   // instances of replay_controller.ysc
 	d.AddMember("PlayerPedExists", false, allocator);
 	d.AddMember("PlayerInVehicle", false, allocator);
-	d.AddMember("RenderMode", false, allocator);
-	d.AddMember("RenderTarget", 0, allocator);
 	d.AddMember("ScreenFadedOut", false, allocator);
 	{
 		Value gp(kArrayType); gp.PushBack(0.0, allocator).PushBack(0.0, allocator).PushBack(0.0, allocator);
@@ -489,8 +487,7 @@ StringBuffer DataExport::generateMessage() {
 	}
 
 	{
-		// [rockstar] No ego (render mode before a target is locked, or a replay
-		// camera the user wants as-is): freeze the frame without moving our cam.
+		// No ego yet (nothing spawned): freeze the frame without moving our cam.
 		Vehicle ev = egoHandle();
 		if (ev) setRenderingCam(ev);
 		else freezeFrameNoCam();
@@ -852,8 +849,6 @@ void DataExport::exportEgoState() {
 		d["ReplayScriptRefs"] = invoke<int>(0x2C83A9DA6BFFC4F9, GAMEPLAY::GET_HASH_KEY("replay_controller"));
 		d["PlayerPedExists"] = ppOk;
 		d["PlayerInVehicle"] = ppOk && PED::IS_PED_IN_ANY_VEHICLE(pp, FALSE);
-		d["RenderMode"] = m_renderMode;
-		d["RenderTarget"] = (int)m_renderTarget;
 		d["ScreenFadedOut"] = CAM::IS_SCREEN_FADED_OUT() != 0;
 		Vector3 gp = CAM::GET_GAMEPLAY_CAM_COORD();
 		Vector3 gr = CAM::GET_GAMEPLAY_CAM_ROT(0);
