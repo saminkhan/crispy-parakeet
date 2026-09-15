@@ -33,8 +33,11 @@ frame-identical replays. Same place, same conditions, same ego vehicle, same
 staged incident, same seeded-actor counts -- different traffic around them.
 """
 
+import glob
 import math
+import os
 import random
+import shutil
 import time
 import uuid
 import zlib
@@ -43,7 +46,8 @@ import numpy as np
 
 from deepgtav.messages import (
     Config, Dataset, PrepareLocation, Scenario as GtaScenario,
-    SetActorBehaviour, SetCameraPositionAndRotation, SetClockTime, SetSceneDensity,
+    SetActorBehaviour, SetCameraPositionAndRotation, SetClipRecording, SetClockTime,
+    SetSceneDensity,
     SetSurvivalMode, SeedScene, SetCameraMount, SetIgniteWrecks, SetRoadLeash,
     SetTimeScale, SetWeather, frame2numpy,
 )
@@ -299,7 +303,8 @@ class EpisodeRunner:
                                  spawnedEntitiesDespawnSeconds=self._despawn_seconds(cfg)),
             dataset=Dataset(rate=cfg.rate_hz, speed=True, location=True, time=True,
                             frame=[cfg.width, cfg.height],
-                            screenResolution=[cfg.screen_width, cfg.screen_height])))
+                            screenResolution=[cfg.screen_width, cfg.screen_height],
+                            captureFrames=bool(getattr(cfg, "capture_frames", True)))))
         self.client.sendMessage(SetCameraMount(
             forwardFrac=cfg.cam_mount_forward_frac,
             upFrac=cfg.cam_mount_up_frac))
@@ -607,6 +612,13 @@ class EpisodeRunner:
         # [longtail] road containment. Counted over delivered frames only: the
         # lead is discarded, and the ego is still road-snapping during it.
         offroad_frames = inclip_frames = 0
+        # [rockstar] Editor recording of this clip: started at the first recorded
+        # frame, stopped after the last. `clip_rec` is the record that lands in
+        # meta.json; None means recording was not requested.
+        record_clip = bool(getattr(self.cfg, "record_clip", False))
+        clip_rec = None
+        clip_lib_before = None
+        clip_rec_sent_ms = clip_rec_first_ms = None
         last_onroad_t = 0.0
         road_dists = []
         prev_pos = prev_t = None
@@ -651,6 +663,18 @@ class EpisodeRunner:
             # Everything before the lead is captured (so the world settles and the
             # ego reaches speed) but never written.
             in_clip = t >= lead
+
+            # [rockstar] Start the Editor's recorder as recording begins, so the
+            # .clip's t=0 lines up with poses.jsonl line 0 to within a game tick.
+            # The plugin exports whether the recorder is actually running; the
+            # first frame that says so is the .clip's true origin.
+            if record_clip and in_clip and clip_rec_sent_ms is None:
+                clip_lib_before = _clip_library_snapshot(self.cfg)
+                ctx.send(SetClipRecording(action="start", mode=0))   # 0 = manual
+                clip_rec_sent_ms = gt
+            if record_clip and clip_rec_first_ms is None and clip_rec_sent_ms is not None \
+                    and state.get("clip_recording"):
+                clip_rec_first_ms = gt
 
             if state.get("collided"):
                 had_collision = True
@@ -838,6 +862,14 @@ class EpisodeRunner:
         _lp = (last_pose or {}).get("position") if last_pose else None
         if _lp:
             self._last_clip_xy = (_lp[0], _lp[1])
+        # [rockstar] Stop the recorder, AFTER every gate above has had its say --
+        # the first field run saved a clip the scene-offset gate rejected a few
+        # lines later, because this ran before that gate did.
+        if record_clip and clip_rec_sent_ms is not None:
+            clip_rec = self._finish_clip_recording(
+                ctx, keep, last_game, clip_rec_sent_ms, clip_rec_first_ms,
+                clip_lib_before, writer.dir, t0_game, lead)
+
         bb_w = int(road.get("backbuffer_w") or 0)
         bb_h = int(road.get("backbuffer_h") or 0)
         meta = writer.finalize({
@@ -893,5 +925,142 @@ class EpisodeRunner:
             "guards": {"everyoneIgnore": False, "vehicleInvincible": False,
                        "playerInvincible": True, "seatbelt": True,
                        "game_over_abort": abort_reason},
+            "rockstar_clip": clip_rec,
         })
         return meta
+
+    # ------------------------------------------------------------------
+    def _finish_clip_recording(self, ctx, keep, last_game_ms, sent_ms, first_ms,
+                               lib_before, clip_dir, t0_game_ms, lead):
+        """Stop the Rockstar Editor recorder and, if the clip is kept, claim the
+        .clip it wrote and move it into the clip's folder as clip.clip.
+
+        The Editor names files itself (Sep-15-2026-Clip-0007.clip + a .jpg
+        thumbnail) in its own library, so the file is identified by what appeared
+        after our snapshot. The move keeps the dataset self-contained and the
+        Editor's library from growing without bound; render_clip.py copies the
+        file back under its original name when it needs the Editor to see it.
+        """
+        cfg = self.cfg
+        origin_ms = first_ms if first_ms is not None else sent_ms
+        recorded_s = max(0.0, (last_game_ms - origin_ms) / 1000.0)
+        rec = {"saved": False, "file": None, "original_name": None,
+               "recorded_s": round(recorded_s, 3),
+               # .clip t=0 relative to poses.jsonl t=0 (the first recorded frame),
+               # in ms: positive means the .clip starts that much AFTER line 0.
+               "offset_ms": int(origin_ms - (t0_game_ms + int(lead * 1000))),
+               "recorder_confirmed": first_ms is not None}
+        min_s = float(getattr(cfg, "clip_min_seconds", 3.5))
+        if not keep or recorded_s < min_s:
+            # Manual mode: STOP without SAVE drops the buffer -- a real discard, and
+            # nothing to wait for. (Under the Editor's 3 s minimum a save would
+            # only fail with a toast anyway.) The delete below is belt and braces
+            # for a build whose mode saves regardless.
+            ctx.send(SetClipRecording(action="discard"))
+            rec["reason"] = ("clip rejected; recording discarded" if not keep else
+                             "recorded %.1f s, under the Editor's minimum (%.1f s); discarded"
+                             % (recorded_s, min_s))
+            time.sleep(1.0)
+            lib = _clip_library_dir(cfg)
+            stray = [n for n in _clip_library_snapshot(cfg, lib) if n not in (lib_before or {})] if lib else []
+            for n in stray:
+                try:
+                    os.remove(os.path.join(lib, n))
+                except OSError:
+                    pass
+            if stray:
+                rec["reason"] += "; %d stray file(s) deleted from the library" % len(stray)
+            return rec
+        ctx.send(SetClipRecording(action="save"))
+
+        lib = _clip_library_dir(cfg)
+        if not lib:
+            rec["reason"] = "stop sent, but no Editor library directory is known (clip_library_dir)"
+            return rec
+        # ⚠ monotonic, not time.time(): a field run recorded wait_s = -1.68 when
+        # the WSL wall clock stepped backwards mid-poll.
+        t_start = time.monotonic()
+        deadline = t_start + float(getattr(cfg, "clip_save_wait_s", 12.0))
+        found = None
+        stable_size = None
+        # ⚠ The recorder may write MORE THAN ONE file for one stop: it chops a
+        # recording into 30 s (rendered-time) segments, and under image capture a
+        # 15 s clip is ~45 s of rendering. All of them belong to this clip. Wait
+        # until the set of new files has been stable in size for a moment -- the
+        # segments land within the same second, but the first run claimed the
+        # first one before the second existed.
+        stable = {}
+        stable_polls = 0
+        while time.monotonic() < deadline:
+            now = _clip_library_snapshot(cfg, lib)
+            new = {n: sz for n, sz in now.items()
+                   if n.endswith(".clip") and n not in (lib_before or {})}
+            if new:
+                if new == stable and all(sz > 0 for sz in new.values()):
+                    stable_polls += 1
+                    if stable_polls >= 3:            # ~0.75 s with nothing changing
+                        found = [os.path.join(lib, n) for n in sorted(new)]
+                        break
+                else:
+                    stable_polls = 0
+                stable = new
+            time.sleep(0.25)
+        rec["wait_s"] = round(time.monotonic() - t_start, 2)
+        if not found:
+            rec["reason"] = ("save sent, but no new .clip appeared in %s within %.0f s "
+                             "(the Editor shows why on screen)" % (lib, deadline - t_start))
+            return rec
+        names = [os.path.basename(f) for f in found]
+        thumbs = [os.path.splitext(f)[0] + ".jpg" for f in found]
+        try:
+            files = []
+            for i, (f, th) in enumerate(zip(found, thumbs)):
+                dst = "clip.clip" if i == 0 else "clip.%d.clip" % (i + 1)
+                shutil.move(f, os.path.join(clip_dir, dst))
+                files.append(dst)
+                if os.path.exists(th):
+                    shutil.move(th, os.path.join(clip_dir,
+                                "clip_thumb.jpg" if i == 0 else "clip_thumb.%d.jpg" % (i + 1)))
+            rec.update({"saved": True, "file": "clip.clip", "files": files,
+                        "segments": len(files), "original_name": names[0],
+                        "original_names": names,
+                        "bytes": sum(os.path.getsize(os.path.join(clip_dir, f)) for f in files)})
+            if len(files) > 1:
+                rec["note"] = ("the recorder split this clip into %d segments (30 s of "
+                               "rendered time each); render_clip.py plays them in order"
+                               % len(files))
+        except OSError as exc:
+            rec["reason"] = "could not move %s into the clip folder: %s" % (names, exc)
+        return rec
+
+
+def _clip_library_dir(cfg):
+    """The Rockstar Editor's clip library, as a WSL path, or "".
+
+    The runner resolves it from the same Documents lookup it uses for
+    settings.xml and passes it in as clip_library_dir. Standalone generator
+    runs fall back to a search of the usual places.
+    """
+    lib = str(getattr(cfg, "clip_library_dir", "") or "")
+    if lib:
+        return lib
+    for pat in ("/mnt/*/*/Documents/Rockstar Games/GTA V/videos/clips",
+                "/mnt/c/Users/*/Documents/Rockstar Games/GTA V/videos/clips",
+                "/mnt/c/Users/*/OneDrive/Documents/Rockstar Games/GTA V/videos/clips"):
+        hits = sorted(glob.glob(pat))
+        if hits:
+            return hits[0]
+    return ""
+
+
+def _clip_library_snapshot(cfg, lib=None):
+    """{filename: size} for the Editor library, or {} if it does not exist yet."""
+    lib = lib or _clip_library_dir(cfg)
+    out = {}
+    if lib and os.path.isdir(lib):
+        for n in os.listdir(lib):
+            try:
+                out[n] = os.path.getsize(os.path.join(lib, n))
+            except OSError:
+                pass
+    return out

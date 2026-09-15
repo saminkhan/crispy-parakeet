@@ -37,7 +37,8 @@ for _p in (os.path.dirname(_HERE), _HERE):
         sys.path.insert(0, _p)
 
 from deepgtav.client import Client
-from deepgtav.messages import Dataset, Scenario as GtaScenario, Start, Stop, StartRecording
+from deepgtav.messages import (Dataset, Scenario as GtaScenario, SetCapturePause, Start,
+                               Stop, StartRecording)
 
 # ⚠ NOT `from longtail import writer` above the sys.path repair: that only
 # worked when the caller had already put VPilot on PYTHONPATH, and died with
@@ -425,6 +426,14 @@ def main():
     # run looks alive, holds the GPU lock, and produces nothing.
     client = Client(ip=args.host, port=args.port, recv_timeout_ms=120000)
 
+    # [rockstar] ⚠ Before the first capture cycle, not after: the replay recorder
+    # latches on the FIRST SET_GAME_PAUSED it sees in a process. With .clip
+    # recording on, the plugin captures under SET_TIME_SCALE(0) alone.
+    if getattr(cfg, "record_clip", False):
+        client.sendMessage(SetCapturePause(enabled=False))
+        print("[longtail] rockstar editor recording ON: capture pause disabled, "
+              "library %s" % (getattr(cfg, "clip_library_dir", "") or "(auto)"))
+
     # One Start; every clip afterwards is a Config, which rebuilds the scenario
     # in place (Scenario::config also calls buildScenario).
     client.sendMessage(Start(
@@ -433,7 +442,11 @@ def main():
                              drivingMode=[ds.NORMAL, cfg.ego_cruise_speed]),
         dataset=Dataset(rate=cfg.rate_hz, speed=True, location=True, time=True,
                         frame=[cfg.width, cfg.height],
-                        screenResolution=[cfg.screen_width, cfg.screen_height])))
+                        screenResolution=[cfg.screen_width, cfg.screen_height],
+                        captureFrames=bool(getattr(cfg, "capture_frames", True)))))
+    if not getattr(cfg, "capture_frames", True):
+        print("[longtail] frames OFF: poses%s only, no backbuffer capture, game time at wall time"
+              % (" + .clip" if getattr(cfg, "record_clip", False) else ""))
 
     # ⚠ recording_active defaults to FALSE in DataExport.h. Without StartRecording
     # the plugin never calls capture(), and every frame the client receives is the

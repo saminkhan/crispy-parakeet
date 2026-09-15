@@ -534,6 +534,26 @@ class CaptureSettings:
     graphics: str = "high"         # "low"|"medium"|"high"|"ultra"
     video_crf: int = 16
     keep_frames: bool = False
+
+    #: Record a Rockstar Editor .clip of every kept clip. The .clip is the game's
+    #: own recording of the scene -- entity states, not pixels -- which the Editor
+    #: replays in-engine, so the scene can be re-rendered later at another
+    #: resolution or from another camera (see render_clip.py) without capturing it
+    #: again. It lands in the clip folder as clip.clip (+ clip_thumb.jpg).
+    #: ⚠ Turning this on changes how frames are captured: the plugin stops pausing
+    #: the game around each grab (the Editor's recorder never saves again once it
+    #: has seen SET_GAME_PAUSED) and freezes time with SET_TIME_SCALE(0) instead.
+    record_clip: bool = True
+    #: Encode clip.mp4 from the captured frames. Off by default: with .clip files
+    #: the video is a derived product you can make later, at any resolution or
+    #: camera, and skipping the encode keeps ffmpeg out of the run entirely. With
+    #: make_mp4 off AND keep_frames off, a clip folder holds poses.jsonl, meta.json
+    #: and clip.clip -- nothing to look at until you render it.
+    make_mp4: bool = False
+    #: Where the Editor writes clips (<Documents>/Rockstar Games/GTA V/videos/clips,
+    #: as a WSL path). Leave empty: it is found from the registry, next to
+    #: settings.xml, exactly where the game puts it.
+    clip_library_dir: str = ""
     max_hours: float = 0.0         # 0 = unlimited
     clips_per_lifetime: int = 12
     host: str = "172.28.32.1"      # WSL->Windows vEthernet address
@@ -760,6 +780,23 @@ class CaptureSettings:
             p.append("port must be between 1 and 65535, got %d" % self.port)
 
 
+        # --- deliverables ---
+        for name in ("record_clip", "make_mp4", "keep_frames"):
+            if not isinstance(getattr(self, name), bool):
+                p.append("%s must be true or false, got %r" % (name, getattr(self, name)))
+        if not isinstance(self.clip_library_dir, str):
+            p.append("clip_library_dir must be a path string or empty, got %r"
+                     % (self.clip_library_dir,))
+        elif self.clip_library_dir and not os.path.isdir(os.path.dirname(self.clip_library_dir.rstrip("/"))):
+            p.append("clip_library_dir %r: its parent folder does not exist (the game "
+                     "creates videos/clips itself, but it must live somewhere)"
+                     % self.clip_library_dir)
+        if (self.record_clip is False and self.make_mp4 is False
+                and self.keep_frames is False):
+            p.append("nothing visual would be kept: record_clip, make_mp4 and "
+                     "keep_frames are all false, so every clip folder would hold "
+                     "only poses.jsonl and meta.json; turn one of them on")
+
         # --- variations ---
         p.extend(_variation_problems(self.variations))
 
@@ -805,6 +842,14 @@ class CaptureSettings:
         # frame/pose count mismatch and the caller must not prune on None -- that
         # gate lives in the runner, not here.
         d["video_only"] = not bool(self.keep_frames)
+
+        d["record_clip"] = bool(self.record_clip)
+        d["clip_library_dir"] = str(self.clip_library_dir or "")
+        # ★ Images are captured only if something will use them. With .clip as the
+        #   deliverable and no mp4/frames wanted, the run is poses + .clip: no
+        #   backbuffer reads, no time freeze, game time at wall time -- which is
+        #   also what keeps each .clip in one piece (see CaptureConfig.capture_frames).
+        d["capture_frames"] = bool(self.make_mp4 or self.keep_frames)
 
         d["out_dir"] = self.output_dir
         return d

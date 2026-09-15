@@ -37,7 +37,7 @@ import threading
 import time
 
 from .finalize import Finalizer
-from .game import Game
+from .game import Game, clip_library_dir
 from .manifest import Manifest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -211,8 +211,21 @@ def override_variations(settings, spec):
     return None
 
 
+def _resolve_clip_library(settings):
+    """Fill settings.clip_library_dir from the registry when .clip recording is on.
+
+    Done here, on the runner's side of the fence, because the generator has no
+    business reading the Windows registry -- and because every variation config
+    is derived from the settings object, so filling the field once covers them.
+    """
+    if getattr(settings, "record_clip", False) and not getattr(settings, "clip_library_dir", ""):
+        settings.clip_library_dir = clip_library_dir()
+    return settings.clip_library_dir
+
+
 def _write_generator_config(settings):
     path = _generator_config_path(settings)
+    _resolve_clip_library(settings)
     cfg = settings.to_generator_config()
     plan = _variation_plan(settings)
     if plan:
@@ -988,6 +1001,24 @@ def dry_run(settings):
     print("[capture] chaos     %s    graphics %s    crf %s    keep_frames %s"
           % (settings.chaos, settings.graphics, settings.video_crf,
              settings.keep_frames))
+
+    lib = _resolve_clip_library(settings)
+    if settings.record_clip:
+        print("[capture] clips     Rockstar Editor .clip per kept clip -> clip.clip "
+              "(library %s)%s" % (lib or "NOT FOUND -- is the game installed and run once?",
+                                  "" if lib else "  ⚠"))
+    else:
+        print("[capture] clips     Rockstar Editor recording off")
+    print("[capture] mp4       %s" % (
+        "encoded in the background (clip.mp4)" if settings.make_mp4 else
+        "off -- render later from clip.clip with render_clip.py"
+        + ("" if settings.record_clip or settings.keep_frames else "  ⚠ and no frames kept")))
+    print("[capture] frames    %s" % (
+        "captured (%s)" % ", ".join(n for n, on in (("mp4", settings.make_mp4),
+                                                    ("keep_frames", settings.keep_frames)) if on)
+        if (settings.make_mp4 or settings.keep_frames) else
+        "NOT captured -- poses%s only; the game runs at real speed"
+        % (" + .clip" if settings.record_clip else "")))
 
     # The plan is needed before the target line: it decides the lifetime size.
     # Its failure is reported as a problem rather than a traceback, like the rest.

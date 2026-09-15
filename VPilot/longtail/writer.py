@@ -71,7 +71,11 @@ class ClipWriter:
         idx = self.n
         ext = self.cfg.image_format
         path = os.path.join(self.frames_dir, "%06d.%s" % (idx, ext))
-        if cv2 is not None:
+        if image_bgr is None:
+            # [rockstar] Frames off: poses only. The row keeps its slot so line k
+            # still means frame k for anything rendered from the .clip later.
+            pass
+        elif cv2 is not None:
             if ext in ("jpg", "jpeg"):
                 cv2.imwrite(path, image_bgr,
                             [int(cv2.IMWRITE_JPEG_QUALITY), self.cfg.jpeg_quality])
@@ -92,7 +96,7 @@ class ClipWriter:
                 "need opencv-python or Pillow to write frames; neither is importable")
 
         row = {"i": idx,
-               "file": "frames/%06d.%s" % (idx, ext),
+               "file": ("frames/%06d.%s" % (idx, ext)) if image_bgr is not None else None,
                "game_time_ms": pose["game_time_ms"],
                "position": pose["position"],
                "theta_deg": pose["theta_deg"],

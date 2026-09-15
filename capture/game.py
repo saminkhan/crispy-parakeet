@@ -245,6 +245,22 @@ def _documents_dirs():
     return out
 
 
+def clip_library_dir():
+    """The Rockstar Editor's clip library (<Documents>/Rockstar Games/GTA V/videos/clips),
+    as a WSL path, or "" if the game's Documents folder cannot be found.
+
+    Resolved from the same Documents lookup as settings.xml, because that is the
+    one place we know the game actually writes: Documents is redirected on many
+    machines, and the library sits beside settings.xml wherever that is. The
+    videos/clips leaf itself is created by the game on the first save, so its
+    absence is not an error.
+    """
+    xml = find_settings_xml()
+    if not xml:
+        return ""
+    return os.path.join(os.path.dirname(xml), "videos", "clips")
+
+
 def find_settings_xml():
     """Absolute WSL path to the live GTA V settings.xml, or None."""
     override = os.environ.get("GTAV_SETTINGS_XML")

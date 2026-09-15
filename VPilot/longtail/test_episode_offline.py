@@ -428,9 +428,156 @@ def test_variations_share_scene():
 
 print("variations-share-scene test passed.")
 
+def test_rockstar_clip_recording():
+    """With record_clip on, the client must drive the Editor's recorder around
+    the recorded window and claim the file it wrote.
+
+    The contract: SetCapturePause(false) is the generator's job (tested by
+    inspection there); per clip, exactly one "start" at the first recorded frame,
+    then "save" for a kept clip or "discard" for a rejected one; the new .clip in
+    the library (which the Editor names itself) is moved into the clip folder as
+    clip.clip with its thumbnail, and meta.json says so.
+    """
+    import json as _json, shutil as _shutil
+    import config as cfgmod, coverage, episode
+
+    out = tempfile.mkdtemp(prefix="rclip_")
+    lib = os.path.join(out, "library")
+    os.makedirs(lib)
+    try:
+        cfg = cfgmod.CaptureConfig(width=64, height=36,
+                                   clip_seconds_min=6.0, clip_seconds_max=6.0,
+                                   discard_lead_s=2.0,
+                                   warmup_seconds_min=0.0, warmup_seconds_max=1.0,
+                                   warmup_min_speed=0.0, out_dir=out,
+                                   image_format="png",
+                                   record_clip=True, clip_library_dir=lib,
+                                   clip_save_wait_s=3.0)
+
+        class EditorPlugin(FakePlugin):
+            """FakePlugin that behaves like the Rockstar Editor's recorder: reports
+            ClipRecording while recording and writes a named file on save."""
+
+            def __init__(self, *a, **kw):
+                FakePlugin.__init__(self, *a, **kw)
+                self.recording = False
+                self.saved = 0
+
+            def sendMessage(self, m):
+                if type(m).__name__ == "SetClipRecording":
+                    if m.action == "start":
+                        self.recording = True
+                    elif m.action == "discard":
+                        # Manual mode: STOP alone drops the buffer. Nothing written.
+                        self.recording = False
+                    elif m.action == "save":
+                        if self.recording:
+                            self.saved += 1
+                            name = "Sep-15-2026-Clip-%04d" % self.saved
+                            with open(os.path.join(lib, name + ".clip"), "wb") as f:
+                                f.write(b"\0" * 4096)
+                            with open(os.path.join(lib, name + ".jpg"), "wb") as f:
+                                f.write(b"\xff\xd8" + b"\0" * 64)
+                        self.recording = False
+                return FakePlugin.sendMessage(self, m)
+
+            def recvMessage(self):
+                m = FakePlugin.recvMessage(self)
+                m["ClipRecording"] = self.recording
+                return m
+
+        plugin = EditorPlugin(warm_frames=5)
+        runner = episode.EpisodeRunner(plugin, cfg, random.Random(5))
+        sampler = coverage.CoverageSampler(os.path.join(out, "rc.json"), seed=5)
+        x, y, region = sampler.propose()
+        meta = runner.run_clip(x, y, region, out)
+        assert meta["keep"], meta["reject_reasons"]
+        acts = [m.action for m in plugin.messages if type(m).__name__ == "SetClipRecording"]
+        assert acts == ["start", "save"], acts
+        d = os.path.join(out, "clips", meta["clip_id"])
+        assert os.path.exists(os.path.join(d, "clip.clip")), os.listdir(d)
+        assert os.path.exists(os.path.join(d, "clip_thumb.jpg"))
+        assert not os.listdir(lib), "library should be empty after the move: %r" % os.listdir(lib)
+        rc = meta["rockstar_clip"]
+        assert rc["saved"] is True and rc["file"] == "clip.clip"
+        assert rc["original_name"] == "Sep-15-2026-Clip-0001.clip", rc
+        assert rc["recorder_confirmed"] is True
+        assert rc["recorded_s"] >= 3.5, rc
+        on_disk = _json.load(open(os.path.join(d, "meta.json")))
+        assert on_disk["rockstar_clip"]["saved"] is True
+
+        # The .clip origin is the first frame the recorder reported running, which
+        # is at or just after the first recorded frame -- never before it.
+        assert 0 <= rc["offset_ms"] < 1500, rc["offset_ms"]
+
+        # A rejected clip discards instead of saving, and nothing is written.
+        # (fade_at must land INSIDE the recorded window and past the Editor's 3 s
+        # minimum -- lead 2 s at 20 Hz is frame 40, 3.5 s more is frame 110 -- or
+        # the recorder never starts / nothing is written and the delete path is
+        # never exercised.)
+        crashed = EditorPlugin(warm_frames=5, fade_at=140)
+        runner2 = episode.EpisodeRunner(crashed, cfg, random.Random(6))
+        x2, y2, region2 = sampler.propose()
+        meta2 = runner2.run_clip(x2, y2, region2, out)
+        assert not meta2["keep"]
+        acts2 = [m.action for m in crashed.messages if type(m).__name__ == "SetClipRecording"]
+        assert acts2 == ["start", "discard"], acts2
+        rc2 = meta2["rockstar_clip"]
+        assert rc2["saved"] is False and "discarded" in rc2.get("reason", ""), rc2
+        assert not os.listdir(lib), "nothing may be left in the library: %r" % os.listdir(lib)
+        assert not os.path.exists(os.path.join(out, "clips", meta2["clip_id"], "clip.clip"))
+
+        print("rockstar-clip recording test passed.")
+        print("  kept clip: %s -> clip.clip (%d B), offset %d ms, recorded %.1f s; "
+              "rejected clip discarded, library empty"
+              % (rc["original_name"], rc["bytes"], rc["offset_ms"], rc["recorded_s"]))
+    finally:
+        _shutil.rmtree(out, ignore_errors=True)
+
+
+def test_frames_off():
+    """capture_frames=False: the plugin sends no image, and the clip must still
+    come out whole -- every pose row present with file=None, no frame files,
+    the clip kept on its pose-based gates alone."""
+    import json as _json, shutil as _shutil
+    import config as cfgmod, coverage, episode
+
+    out = tempfile.mkdtemp(prefix="noframes_")
+    try:
+        cfg = cfgmod.CaptureConfig(width=64, height=36,
+                                   clip_seconds_min=6.0, clip_seconds_max=6.0,
+                                   discard_lead_s=2.0,
+                                   warmup_seconds_min=0.0, warmup_seconds_max=1.0,
+                                   warmup_min_speed=0.0, out_dir=out,
+                                   image_format="jpg", capture_frames=False)
+        plugin = FakePlugin(warm_frames=5)        # its messages carry frame=None
+        runner = episode.EpisodeRunner(plugin, cfg, random.Random(9))
+        sampler = coverage.CoverageSampler(os.path.join(out, "nf.json"), seed=9)
+        x, y, region = sampler.propose()
+        meta = runner.run_clip(x, y, region, out)
+        assert meta["keep"], meta["reject_reasons"]
+        d = os.path.join(out, "clips", meta["clip_id"])
+        rows = [_json.loads(l) for l in open(os.path.join(d, "poses.jsonl"))]
+        assert len(rows) >= 50, len(rows)
+        assert all(r.get("file") is None for r in rows), "frame-less rows must carry file=None"
+        assert all("position" in r and "game_time_ms" in r for r in rows)
+        frames_dir = os.path.join(d, "frames")
+        assert not os.path.isdir(frames_dir) or not os.listdir(frames_dir), "no frame files expected"
+        # The Config that relocates the ego must ask the plugin for no frames.
+        cfgs = [m for m in plugin.messages if type(m).__name__ == "Config"]
+        assert cfgs and all(getattr(c.dataset, "captureFrames", True) is False for c in cfgs), \
+            "Config.dataset.captureFrames must be False"
+        print("frames-off test passed.")
+        print("  %d pose rows, no images, kept on pose gates" % len(rows))
+    finally:
+        _shutil.rmtree(out, ignore_errors=True)
+
+
 if __name__ == "__main__":
     # ⚠ Kept OUT of module scope on purpose: anything importing this file for
     # FakePlugin (the determinism review does) must not execute the test suite
     # as a side effect of the import.
     test_discard_lead()
     test_variations_share_scene()
+    test_rockstar_clip_recording()
+    test_frames_off()

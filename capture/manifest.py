@@ -72,7 +72,22 @@ CLIPS_DIRNAME = "clips"
 #: What a kept clip must leave on disk. reconcile() stats the first path an entry
 #: actually claims, so a clip whose directory survived but whose payload did not
 #: is still caught.
-KEPT_FILES = ("clip.mp4", "poses.jsonl", "meta.json")
+#: The deliverable files a clip folder may hold. clip.mp4 is present only when
+#: make_mp4 is on; clip.clip (+ its thumbnail) only when record_clip is.
+KEPT_FILES = ("clip.mp4", "poses.jsonl", "meta.json", "clip.clip", "clip_thumb.jpg")
+
+
+def kept_files_in(clip_dir):
+    """Deliverable files present in a clip folder, in a fixed order, plus any
+    extra Rockstar Editor segments (clip.2.clip, clip.3.clip, ...) -- the
+    recorder splits long recordings and every piece is part of the clip."""
+    names = [n for n in KEPT_FILES if os.path.exists(os.path.join(clip_dir, n))]
+    try:
+        extra = sorted(n for n in os.listdir(clip_dir)
+                       if n.startswith("clip.") and n.endswith(".clip") and n != "clip.clip")
+    except OSError:
+        extra = []
+    return names + extra
 
 #: Sanity limits on marking clips missing. ⚠ The output directory lives on /mnt/d,
 #: and an unmounted or not-yet-mounted drive looks exactly like "every clip was
@@ -687,14 +702,13 @@ class Manifest(object):
         rel_root = os.path.join(CLIPS_DIRNAME, clip_id)
 
         files, n_bytes = [], 0
-        for name in KEPT_FILES:
+        for name in kept_files_in(clip_dir):
             p = os.path.join(clip_dir, name)
-            if os.path.exists(p):
-                files.append(os.path.join(rel_root, name).replace(os.sep, "/"))
-                try:
-                    n_bytes += os.path.getsize(p)
-                except OSError:
-                    pass
+            files.append(os.path.join(rel_root, name).replace(os.sep, "/"))
+            try:
+                n_bytes += os.path.getsize(p)
+            except OSError:
+                pass
 
         meta = None
         try:
@@ -731,10 +745,21 @@ class Manifest(object):
         # deliverable. writer.encode_video returns None on a frame/pose mismatch,
         # and then clip.mp4 was never written -- adopting that as kept would put a
         # clip with no video into the delivered count.
-        if entry.get("kept") and not os.path.exists(os.path.join(clip_dir, "clip.mp4")):
+        # ★ Unless the mp4 was never part of the deliverable: with make_mp4 off the
+        #   Finalizer records that under meta["delivered"], and the clip stands on
+        #   poses.jsonl + meta.json (+ clip.clip, + frames). A clip whose meta has
+        #   no `delivered` block predates that setting and still needs its mp4.
+        delivered = meta.get("delivered") if isinstance(meta.get("delivered"), dict) else None
+        mp4_expected = True if delivered is None else bool(delivered.get("mp4"))
+        if (entry.get("kept") and mp4_expected
+                and not os.path.exists(os.path.join(clip_dir, "clip.mp4"))):
             entry["kept"] = False
             entry["reject_reasons"] = list(entry.get("reject_reasons") or []) + [
                 "adopted from disk without clip.mp4"]
+        if entry.get("kept") and not os.path.exists(os.path.join(clip_dir, "poses.jsonl")):
+            entry["kept"] = False
+            entry["reject_reasons"] = list(entry.get("reject_reasons") or []) + [
+                "adopted from disk without poses.jsonl"]
         if os.path.isdir(os.path.join(clip_dir, "frames")):
             entry["has_frames_dir"] = True
         return entry, True

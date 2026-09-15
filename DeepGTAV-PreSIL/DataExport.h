@@ -149,6 +149,25 @@ private:
 	// game and sets scale 0; upstream restored a hard-coded 1.0f. Lower this around
 	// a collision to spend more frames on the highest-information moment.
 	float m_resumeTimeScale = 1.0f;
+	// [longtail] Whether the capture cycle wraps itself in SET_GAME_PAUSED. ⚠ The
+	// Rockstar Editor's replay recorder latches "paused" on that native and never
+	// records again in the process, so a .clip-recording run must capture with
+	// SET_TIME_SCALE(0) alone. The JSON build and the frame grab already happen
+	// inside one script tick, so the world cannot advance between them either way.
+	bool  m_pauseForCapture = true;
+	// [rockstar] Frames off: export poses at the requested rate but never touch
+	// the backbuffer and never freeze time for a grab. ★ With no image there is
+	// nothing for the pose to be consistent WITH, so the freeze has no purpose --
+	// and it is the freeze that stretches a 15 s clip into ~45 s of rendering,
+	// which the Editor's recorder chops into 30 s segments. Poses + .clip only:
+	// game time runs at wall time, one .clip per clip, ~3x the capture rate.
+	bool  m_captureFrames = true;
+	// [rockstar] Render mode: capture a Rockstar Editor replay instead of a live
+	// scenario. There is no scenario ego then; the camera is mounted on a render
+	// TARGET (the replayed ego, located by the client from the original poses) or,
+	// with no target, left where the replay puts it and its pose exported instead.
+	bool    m_renderMode   = false;
+	Vehicle m_renderTarget = 0;
 
 
 	Cam camera = NULL;
@@ -179,6 +198,22 @@ public:
 	// Accessors rather than making the fields public: ownership stays here.
 	Cam getCamera() const { return camera; }
 	void setResumeTimeScale(float s) { m_resumeTimeScale = s; }
+	void setPauseForCapture(bool b) { m_pauseForCapture = b; }
+	bool captureFrames() const { return m_captureFrames; }
+	void setRenderMode(bool on) { m_renderMode = on; }
+	bool renderMode() const { return m_renderMode; }
+	void setRenderTarget(Vehicle v) { m_renderTarget = v; }
+	Vehicle renderTarget() const { return m_renderTarget; }
+	//: The vehicle the camera and the ego exports refer to: the render target in
+	//: render mode, else the scenario's ego, else 0. Every exporter that used to
+	//: dereference m_ownVehicle blindly goes through this.
+	Vehicle egoHandle() const {
+		if (m_renderTarget && ENTITY::DOES_ENTITY_EXIST(m_renderTarget)) return m_renderTarget;
+		if (m_ownVehicle && *m_ownVehicle && ENTITY::DOES_ENTITY_EXIST(*m_ownVehicle)) return *m_ownVehicle;
+		return 0;
+	}
+	void freezeFrameNoCam();
+	bool pauseForCapture() const { return m_pauseForCapture; }
 	float getResumeTimeScale() const { return m_resumeTimeScale; }
 
 	// TODO make private, make camera fully owned by DataExport

@@ -5,11 +5,12 @@ per-frame camera pose, aimed at the safety-critical events that are rare in real
 fleet logs: collisions, near-misses, rollovers, vehicle fires, and pedestrians
 stepping into the road.
 
-Each kept clip is a folder with three files:
+Each kept clip is a folder with these files:
 
 | file | contents |
 |---|---|
-| `clip.mp4` | the video, played back at true speed |
+| `clip.clip` | the scene itself, as a Rockstar Editor recording: every entity's state, frame by frame, replayable in-engine from any camera |
+| `clip.mp4` | the video, played back at true speed — optional during the run (`make_mp4`), or rendered afterwards from `clip.clip` |
 | `poses.jsonl` | one line per frame — camera position, rotation, FOV, timestamp, speed |
 | `meta.json` | what happened in the clip, and how it was captured |
 
@@ -51,9 +52,24 @@ the same people and cars. ⚠ Physics and AI are still not bit-exact across runs
 same situation, not the same pixels. What is and is not held constant is spelled
 out in [SETUP.md](SETUP.md#counterfactual-variations).
 
+## Record the scene, render the video later
+
+By default the run captures no images at all. It records each kept clip with
+GTA V's own Rockstar Editor recorder — a `.clip` file holding the scene, not
+pixels — alongside `poses.jsonl` and `meta.json`, and because nothing is being
+grabbed from the backbuffer the game runs at real speed and the run captures
+roughly three times as many clips per hour. The video is a derived product:
+`render_clip.py` replays the `.clip` in the game and captures it again, from the
+original camera or from one you move, producing a fresh `clip.mp4` and a matching
+`poses.jsonl` per render. One capture, any number of camera views, and the run
+itself never waits on ffmpeg. Set `make_mp4: true` to also encode during the run,
+as before. The why and the caveats (same game version, the 3-second rule, why the
+plugin stops pausing the game) are in
+[SETUP.md](SETUP.md#rockstar-editor-clips--record-the-scene-render-the-video-later).
+
 ## Configuration
 
-Eighteen keys in one JSON file — resolution, frame rate, clip length, graphics
+Twenty-one keys in one JSON file — resolution, frame rate, clip length, graphics
 preset, how many clips you want, and a single `chaos` dial from 0.0 to 1.0 that
 moves some thirty underlying knobs together, from calm lawful traffic to dense
 aggressive traffic with crowds crossing in front of the car. An optional

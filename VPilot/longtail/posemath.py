@@ -167,6 +167,17 @@ def ego_state_from_message(msg):
         "scenario_gen": int(msg.get("ScenarioGen") or 0),
         # A lawful ego stops at red lights; that is not a stuck spawn.
         "at_traffic_light": b("EgoAtLight"),
+        "clip_recording": b("ClipRecording"),
+        # [rockstar] Editor / replay state for render_clip.py
+        "pause_menu": b("PauseMenuActive"),
+        "replay_script_refs": int(f("ReplayScriptRefs") or 0),
+        "player_ped": b("PlayerPedExists"),
+        "player_in_vehicle": b("PlayerInVehicle"),
+        "render_mode": b("RenderMode"),
+        "render_target": int(f("RenderTarget") or 0),
+        "screen_faded_out": b("ScreenFadedOut"),
+        "gameplay_cam_pos": msg.get("GameplayCamPos"),
+        "gameplay_cam_rot": msg.get("GameplayCamRot"),
         # ★ What the OTHER vehicles are doing. Every other measurement is about
         # the ego, so "do collisions displace and damage other traffic" could only
         # be judged by watching clips.

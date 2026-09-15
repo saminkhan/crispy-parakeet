@@ -14,6 +14,8 @@
   "deterministic_population": "auto",
   "graphics": "high",
   "video_crf": 16,
+  "record_clip": true,
+  "make_mp4": false,
   "keep_frames": false,
   "host": "172.28.32.1",
   "port": 8000,

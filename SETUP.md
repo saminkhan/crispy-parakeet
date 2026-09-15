@@ -8,9 +8,10 @@ Each finished clip is a folder containing three files:
 
 | file | what it is |
 |---|---|
-| `clip.mp4` | the video, played back at true speed |
+| `clip.clip` | the scene itself, as a Rockstar Editor recording — re-render it later from any camera (see below) |
 | `poses.jsonl` | one line per frame: camera position, rotation, timestamp, speed |
 | `meta.json` | what happened in the clip, and how it was captured |
+| `clip.mp4` | the video, played back at true speed — only if `make_mp4` is on, or after you render it from `clip.clip` |
 
 ★ **`clip.mp4` frame *k* is `poses.jsonl` line *k*.** That is the whole point of the
 dataset, and the pipeline refuses to keep a clip where it isn't true.
@@ -221,6 +222,8 @@ edit the values in place, do not replace the whole file with just this:
 | `width` / `height` | `1920` / `1080` | Video resolution. |
 | `rate_hz` | `30` | Frames captured per second of in-game time. |
 | `max_hours` | `0` | Stop after this many hours. `0` means no limit. |
+| `record_clip` | `true` | Save a Rockstar Editor `.clip` of every kept clip. See below. |
+| `make_mp4` | `false` | Also encode `clip.mp4` during the run. Off by default: render it later from the `.clip`. With this and `keep_frames` both off, no images are captured at all — see below. |
 | `keep_frames` | `false` | Keep the raw JPEGs as well as the mp4. Uses ~4× the disk. |
 | `variations` | `[]` | Capture each scene several times with different behaviour. `"counterfactual"` gives the 2×2 grid described below, or list your own. `[]` is off. |
 | `launch_command` | Steam Legacy | How to start the game. Only change this if you do **not** own GTA V on Steam. |
@@ -235,6 +238,57 @@ near-misses are set up to be. `0.8` is a good starting point.
 ⚠ **Higher chaos is not strictly better.** At `1.0` almost every clip ends in a
 collision, so you get very few clips of ordinary driving or near-misses. If you want
 a mix, run several batches at different `chaos` values into different `output_dir`s.
+
+### Rockstar Editor clips — record the scene, render the video later
+
+GTA V has a built-in recorder, the Rockstar Editor, which saves a **`.clip` file**:
+not a video, but a recording of the scene itself — every car, person and object,
+where it was and what it was doing, frame by frame. The game can replay a `.clip`
+inside its own engine, from any camera you choose, at any resolution.
+
+That is why the pipeline records one for every kept clip by default
+(`record_clip: true`), and why the mp4 is optional (`make_mp4: false`). The idea:
+
+- **During the run, capture the scene once.** You get `poses.jsonl` (where the
+  camera was, every frame), `meta.json` (what happened) and `clip.clip` (the scene).
+  No encoding happens, so the run is not waiting on ffmpeg.
+- **Afterwards, render as many videos as you like from the same scene** — the
+  original camera, a camera moved 30 cm to the left, a roof mount — with
+  `render_clip.py`, which replays the `.clip` in the game and captures it again.
+  Each render gives you a new `clip.mp4` and a matching `poses.jsonl`.
+
+If you would rather have a video to look at straight away, set `make_mp4: true`;
+the run then also encodes `clip.mp4` in the background, exactly as before. Set
+`keep_frames: true` to keep the raw JPEGs too.
+
+Things worth knowing:
+
+- **With `make_mp4` and `keep_frames` both off, the run captures no images at
+  all** — just poses and the `.clip`. That is not only cheaper (no backbuffer
+  reads, no JPEGs, about three times the clips per hour); it is what keeps the
+  game running at real speed while the Editor records. Image capture freezes the
+  game around every frame grab, so a 15-second clip takes about 45 seconds to
+  render — the `.clip` is still correct, just recorded more slowly.
+- The `.clip` lands in the clip folder as `clip.clip` (with a `clip_thumb.jpg`
+  thumbnail). It is moved out of the Editor's own library
+  (`Documents\Rockstar Games\GTA V\videos\clips`) so the library does not fill up;
+  `render_clip.py` copies it back when it needs the Editor to see it.
+- A `.clip` only replays on the **same game version with the same mods** it was
+  recorded on. Keep this install around if you want to render later.
+- Recording uses the Editor's *manual* mode (the one behind the F1 key): it starts
+  at the first recorded frame and stops after the last, and a rejected clip is
+  discarded before anything is written. The Editor refuses clips shorter than
+  3 seconds, so a clip that ends early is discarded too. `meta.json` records what
+  happened under `rockstar_clip` (saved or not, the Editor's own file name, how
+  many seconds it recorded, and the offset between the `.clip`'s start and
+  `poses.jsonl` line 0 — about 0.15 s).
+- ⚠ With `record_clip` on the plugin never pauses the game around a frame grab
+  (the Editor's recorder stops working for good the moment it sees that pause)
+  and freezes time with `SET_TIME_SCALE 0` instead. Captured frames and poses are
+  the same either way.
+- If a run reports `NO .clip` for kept clips, look at the game window: the Editor
+  says on screen why it would not save (usually the 3-second rule, or a full
+  library).
 
 ### Counterfactual variations
 

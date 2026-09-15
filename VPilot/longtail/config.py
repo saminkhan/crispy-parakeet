@@ -86,6 +86,29 @@ class CaptureConfig:
     max_clips: int = 0             # 0 = run until stopped
     seed: int = 0
 
+    # --- Rockstar Editor .clip recording ----------------------------------
+    #: Record each clip with the game's own Rockstar Editor recorder as well. The
+    #: .clip is the scene itself -- entity states the Editor replays in-engine --
+    #: so it can be re-rendered later at another resolution or from another camera
+    #: without capturing again. ★ Turning this on also turns the capture pause OFF
+    #: (SetCapturePause false): the replay recorder latches on SET_GAME_PAUSED and
+    #: saves nothing afterwards, while SET_TIME_SCALE(0) alone leaves it recording.
+    record_clip: bool = False
+    #: Capture images at all. Off = poses (+ .clip) only: the plugin never reads
+    #: the backbuffer or freezes time, so game time runs at wall time and the run
+    #: is ~3x faster. ⚠ With frames ON and record_clip on, the Editor's recorder
+    #: sees ~3 s of rendering per second of game time and may chop the recording
+    #: into 30 s segments; every segment is kept (clip.clip, clip.2.clip, ...).
+    capture_frames: bool = True
+    #: The Editor's library, where it writes clips (WSL path). "" = search the
+    #: usual Documents locations. The runner fills this in from the registry.
+    clip_library_dir: str = ""
+    #: The Editor refuses to save anything shorter than 3 s. Discard rather than
+    #: let a short abort fail with a toast on screen.
+    clip_min_seconds: float = 3.5
+    #: How long to wait for the saved .clip to appear in the library.
+    clip_save_wait_s: float = 12.0
+
     # --- ego ------------------------------------------------------------
     ego_vehicles: list = field(default_factory=lambda: [
         "blista", "voltic", "packer", "sultan", "asea", "futo", "baller", "bison",

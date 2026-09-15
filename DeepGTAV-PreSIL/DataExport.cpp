@@ -28,7 +28,11 @@ const float VERT_CAM_FOV = 59; //In degrees
 void DataExport::initialize() {
 	Vector3 rotation;
 
-	rotation = ENTITY::GET_ENTITY_ROTATION(*m_ownVehicle, 0);
+	{
+		Vehicle ev = egoHandle();
+		if (ev) rotation = ENTITY::GET_ENTITY_ROTATION(ev, 0);
+		else { rotation.x = 0.0f; rotation.y = 0.0f; rotation.z = 0.0f; }   // render mode, no target yet
+	}
 	CAM::DESTROY_ALL_CAMS(TRUE);
 	camera = CAM::CREATE_CAM("DEFAULT_SCRIPTED_CAMERA", TRUE);
 	//if (strcmp(_vehicle, "packer") == 0) CAM::ATTACH_CAM_TO_ENTITY(camera, vehicle, 0, 2.35, 1.7, TRUE);
@@ -67,6 +71,10 @@ void DataExport::parseDatasetConfig(const Value& dc, bool setDefaults) {
 	log("DataExport::parseDatasetConifg");
 
 
+	if (dc.HasMember("captureFrames") && dc["captureFrames"].IsBool()) {
+		m_captureFrames = dc["captureFrames"].GetBool();
+		log(std::string("[longtail] captureFrames=") + (m_captureFrames ? "true" : "false"), true);
+	} else if (setDefaults) m_captureFrames = true;
 	if (!dc["frame"].IsNull()) {
 		if (!dc["frame"][0].IsNull()) s_camParams.width = dc["frame"][0].GetInt();
 		else if (setDefaults) s_camParams.width = _DEFAULT_CAMERA_WIDTH_;
@@ -254,6 +262,24 @@ void DataExport::buildJSONObject() {
 	d.AddMember("RoadNodeDist", 0.0, allocator);     // m to nearest vehicle node
 	d.AddMember("ScenarioGen", 0, allocator);       // advances on every scenario build
 	d.AddMember("EgoAtLight", false, allocator);     // lawfully stopped at a red
+	d.AddMember("ClipRecording", false, allocator);  // Rockstar Editor recorder is running
+	// [rockstar] Editor / replay state, for driving playback from the client.
+	d.AddMember("PauseMenuActive", false, allocator);
+	d.AddMember("ReplayScriptRefs", 0, allocator);   // instances of replay_controller.ysc
+	d.AddMember("PlayerPedExists", false, allocator);
+	d.AddMember("PlayerInVehicle", false, allocator);
+	d.AddMember("RenderMode", false, allocator);
+	d.AddMember("RenderTarget", 0, allocator);
+	d.AddMember("ScreenFadedOut", false, allocator);
+	{
+		Value gp(kArrayType); gp.PushBack(0.0, allocator).PushBack(0.0, allocator).PushBack(0.0, allocator);
+		d.AddMember("GameplayCamPos", gp, allocator);
+		Value gr(kArrayType); gr.PushBack(0.0, allocator).PushBack(0.0, allocator).PushBack(0.0, allocator);
+		d.AddMember("GameplayCamRot", gr, allocator);
+	}
+	d.AddMember("ReplayInit", false, allocator);     // replay system initialised
+	d.AddMember("ReplayAvail", false, allocator);    // replay system available (not blocked)
+	d.AddMember("ReplaySpace", false, allocator);    // record space available
 	// [longtail] ★ What the OTHER vehicles are doing. Every outcome measurement was
 	// about the ego -- body health, decel, roll -- so "do collisions actually
 	// displace and damage other traffic" was unanswerable from the data, and the
@@ -391,9 +417,11 @@ void DataExport::setRenderingCam(Vehicle v) {
 	offsetWorld.y -= s_camParams.pos.y;
 	offsetWorld.z -= s_camParams.pos.z;
 
-	GAMEPLAY::SET_TIME_SCALE(0.0f);
-	GAMEPLAY::SET_GAME_PAUSED(false);
-	GAMEPLAY::SET_TIME_SCALE(0.0f);
+	if (m_captureFrames) {
+		GAMEPLAY::SET_TIME_SCALE(0.0f);
+		if (m_pauseForCapture) GAMEPLAY::SET_GAME_PAUSED(false);
+		GAMEPLAY::SET_TIME_SCALE(0.0f);
+	}
 
 	//TODO fix pointer billiard, after making DataExport the owner of the camera
 	CAM::SET_CAM_COORD(camera, position.x + offsetWorld.x, position.y + offsetWorld.y, position.z + offsetWorld.z);
@@ -402,9 +430,13 @@ void DataExport::setRenderingCam(Vehicle v) {
 	// TODO this was added for simplicity, its ownership should be restrucutred.
 	s_camParams.cameraRotationOffset = cameraRotationOffset;
 
-
-	scriptWait(0);
-	GAMEPLAY::SET_GAME_PAUSED(true);
+	// [rockstar] The one-frame wait lets the camera move at frozen time so the
+	// grab matches the pose. With frames off there is no grab; the pose is read
+	// from the camera we just set, and the game keeps running.
+	if (m_captureFrames) {
+		scriptWait(0);
+		if (m_pauseForCapture) GAMEPLAY::SET_GAME_PAUSED(true);
+	}
 
 	//std::ostringstream oss;
 	//oss << "EntityID/rotation/position: " << v << "\n" <<
@@ -428,6 +460,18 @@ void DataExport::setCameraPositionAndRotation(float x, float y, float z, float r
 
 
 
+// [rockstar] The time-freeze half of setRenderingCam() with no camera update:
+// the same SET_TIME_SCALE(0) / one-frame wait so the grab and the pose describe
+// one frozen instant, for a capture that renders whatever camera is active.
+void DataExport::freezeFrameNoCam() {
+	if (!m_captureFrames) return;
+	GAMEPLAY::SET_TIME_SCALE(0.0f);
+	if (m_pauseForCapture) GAMEPLAY::SET_GAME_PAUSED(false);
+	GAMEPLAY::SET_TIME_SCALE(0.0f);
+	scriptWait(0);
+	if (m_pauseForCapture) GAMEPLAY::SET_GAME_PAUSED(true);
+}
+
 StringBuffer DataExport::generateMessage() {
 	logFrame("DataExport::GenerateMessage");
 
@@ -439,10 +483,18 @@ StringBuffer DataExport::generateMessage() {
 	Writer<StringBuffer> writer(buffer);
 
 
-	GAMEPLAY::SET_GAME_PAUSED(true);
-	GAMEPLAY::SET_TIME_SCALE(0.0f);
+	if (m_captureFrames) {
+		if (m_pauseForCapture) GAMEPLAY::SET_GAME_PAUSED(true);
+		GAMEPLAY::SET_TIME_SCALE(0.0f);
+	}
 
-	setRenderingCam((*m_ownVehicle));
+	{
+		// [rockstar] No ego (render mode before a target is locked, or a replay
+		// camera the user wants as-is): freeze the frame without moving our cam.
+		Vehicle ev = egoHandle();
+		if (ev) setRenderingCam(ev);
+		else freezeFrameNoCam();
+	}
 
 	////Can check whether camera and vehicle are aligned
 	//Vector3 camRot2 = CAM::GET_CAM_ROT(camera, 0);
@@ -506,7 +558,7 @@ StringBuffer DataExport::generateMessage() {
 
 
 	if (recording_active) {
-		capture();
+		if (m_captureFrames) capture();
 
 		setCamParams();
 		//setColorBuffer();
@@ -575,9 +627,11 @@ StringBuffer DataExport::generateMessage() {
 	//log(buffer.GetString());
 	//log("End Message");
 
-	GAMEPLAY::SET_GAME_PAUSED(false);
-	// [longtail] was a hard-coded 1.0f; now a knob (see Scenario::setTimeScale)
-	GAMEPLAY::SET_TIME_SCALE(m_resumeTimeScale);
+	if (m_captureFrames) {
+		if (m_pauseForCapture) GAMEPLAY::SET_GAME_PAUSED(false);
+		// [longtail] was a hard-coded 1.0f; now a knob (see Scenario::setTimeScale)
+		GAMEPLAY::SET_TIME_SCALE(m_resumeTimeScale);
+	}
 
 	return buffer;
 }
@@ -657,7 +711,7 @@ void DataExport::setRecording_active(bool x) {
 	log(std::string("[longtail] setRecording_active ") + (x ? "TRUE" : "FALSE") +
 	    (screenCapturer ? " (capturer present)" : " (NO CAPTURER YET)"), true);
 	recording_active = x;
-	if (screenCapturer) screenCapturer->setEnabled(x);
+	if (screenCapturer) screenCapturer->setEnabled(x && m_captureFrames);
 	// [longtail] The capture reads the swapchain backbuffer, so everything the
 	// game draws is baked into the frames. Persistent off-switches here; the
 	// per-frame call in Scenario::hideHudThisFrame() is what actually holds.
@@ -680,7 +734,7 @@ void DataExport::setRecording_active(bool x) {
 //void DataExport::generateSecondaryPerspective(ObjEntity vInfo) {
 //	setRenderingCam(vInfo.entityID, vInfo.height, vInfo.length);
 //
-//	//GAMEPLAY::SET_GAME_PAUSED(true);
+//	//if (m_pauseForCapture) GAMEPLAY::SET_GAME_PAUSED(true);
 //	capture();
 //
 //	setCamParams();
@@ -692,7 +746,7 @@ void DataExport::setRecording_active(bool x) {
 //	std::string filename = m_pObjDet->getStandardFilename("image_2", ".png");
 //	m_pObjDet->exportImage(screenCapturer->pixels, filename);
 //
-//	//GAMEPLAY::SET_GAME_PAUSED(false);
+//	//if (m_pauseForCapture) GAMEPLAY::SET_GAME_PAUSED(false);
 //}
 
 
@@ -705,29 +759,29 @@ void DataExport::setRecording_active(bool x) {
 */
 
 void DataExport::exportThrottle() {
-	d["throttle"] = getFloatValue(*m_ownVehicle, 0x92C);
+	Vehicle ev = egoHandle(); d["throttle"] = ev ? getFloatValue(ev, 0x92C) : 0.0f;
 }
 
 void DataExport::exportBrake() {
-	d["brake"] = getFloatValue(*m_ownVehicle, 0x930);
+	Vehicle ev = egoHandle(); d["brake"] = ev ? getFloatValue(ev, 0x930) : 0.0f;
 }
 
 void DataExport::exportSteering() {
-	d["steering"] = -getFloatValue(*m_ownVehicle, 0x924) / 0.6981317008;
+	Vehicle ev = egoHandle(); d["steering"] = ev ? -getFloatValue(ev, 0x924) / 0.6981317008 : 0.0;
 }
 
 void DataExport::exportSpeed() {
-	d["speed"] = ENTITY::GET_ENTITY_SPEED(*m_ownVehicle);
+	Vehicle ev = egoHandle(); d["speed"] = ev ? ENTITY::GET_ENTITY_SPEED(ev) : 0.0f;
 }
 
 void DataExport::exportYawRate() {
-	Vector3 rates = ENTITY::GET_ENTITY_ROTATION_VELOCITY(*m_ownVehicle);
+	Vehicle ev = egoHandle(); Vector3 rates; if (ev) rates = ENTITY::GET_ENTITY_ROTATION_VELOCITY(ev); else { rates.x = rates.y = rates.z = 0.0f; }
 	d["yawRate"] = rates.z*180.0 / 3.14159265359;
 }
 
 void DataExport::exportLocation() {
 	Document::AllocatorType& allocator = d.GetAllocator();
-	Vector3 pos = ENTITY::GET_ENTITY_COORDS(*m_ownVehicle, false);
+	Vehicle ev = egoHandle(); Vector3 pos; if (ev) pos = ENTITY::GET_ENTITY_COORDS(ev, false); else { pos.x = pos.y = pos.z = 0.0f; }
 	Value location(kArrayType);
 	location.PushBack(pos.x, allocator).PushBack(pos.y, allocator).PushBack(pos.z, allocator);
 	d["location"] = location;
@@ -741,11 +795,11 @@ void DataExport::exportTime() {
 }
 
 void DataExport::exportHeightAboveGround() {
-	Vector3 pos = ENTITY::GET_ENTITY_COORDS(*m_ownVehicle, false);
+	Vehicle ev = egoHandle(); Vector3 pos; if (ev) pos = ENTITY::GET_ENTITY_COORDS(ev, false); else { pos.x = pos.y = pos.z = 0.0f; }
 	float waterZ;
 	WATER::GET_WATER_HEIGHT(pos.x, pos.y, pos.z, &waterZ);
 	float heightAboveWater = pos.z - waterZ;
-	float height = std::min(heightAboveWater, ENTITY::GET_ENTITY_HEIGHT_ABOVE_GROUND(*m_ownVehicle));
+	float height = ev ? std::min(heightAboveWater, ENTITY::GET_ENTITY_HEIGHT_ABOVE_GROUND(ev)) : 0.0f;
 
 	d["HeightAboveGround"] = height;
 }
@@ -762,7 +816,7 @@ void DataExport::exportHeightAboveGround() {
 //}
 
 void DataExport::exportReward() {
-	d["reward"] = rewarder->computeReward(*m_ownVehicle);
+	Vehicle ev = egoHandle(); d["reward"] = ev ? rewarder->computeReward(ev) : 0.0f;
 }
 
 void DataExport::exportCameraPosition() {
@@ -778,7 +832,7 @@ void DataExport::exportCameraPosition() {
 // what it ASKED for and never what occurred.
 // ⚠ IS_ENTITY_ON_FIRE lives in the FIRE namespace, not ENTITY.
 void DataExport::exportEgoState() {
-	Vehicle v = (m_ownVehicle != NULL) ? (*m_ownVehicle) : NULL;
+	Vehicle v = egoHandle();
 	Ped p = PLAYER::PLAYER_PED_ID();
 
 	bool haveV = (v != NULL) && ENTITY::DOES_ENTITY_EXIST(v);
@@ -789,6 +843,26 @@ void DataExport::exportEgoState() {
 	// that as a bad spawn -- a both_sane variation was rejected for "immobile 4 s
 	// before any impact" while waiting at a junction. Export the reason it stopped.
 	d["EgoAtLight"] = haveV ? (VEHICLE::IS_VEHICLE_STOPPED_AT_TRAFFIC_LIGHTS(v) != 0) : false;
+	d["ClipRecording"] = UNK1::_IS_RECORDING() != 0;
+	{
+		Ped pp = PLAYER::PLAYER_PED_ID();
+		const bool ppOk = ENTITY::DOES_ENTITY_EXIST(pp) != 0;
+		d["PauseMenuActive"] = UI::IS_PAUSE_MENU_ACTIVE() != 0;
+		// GET_NUMBER_OF_REFERENCES_OF_SCRIPT_WITH_NAME_HASH, absent from this header; by hash.
+		d["ReplayScriptRefs"] = invoke<int>(0x2C83A9DA6BFFC4F9, GAMEPLAY::GET_HASH_KEY("replay_controller"));
+		d["PlayerPedExists"] = ppOk;
+		d["PlayerInVehicle"] = ppOk && PED::IS_PED_IN_ANY_VEHICLE(pp, FALSE);
+		d["RenderMode"] = m_renderMode;
+		d["RenderTarget"] = (int)m_renderTarget;
+		d["ScreenFadedOut"] = CAM::IS_SCREEN_FADED_OUT() != 0;
+		Vector3 gp = CAM::GET_GAMEPLAY_CAM_COORD();
+		Vector3 gr = CAM::GET_GAMEPLAY_CAM_ROT(0);
+		d["GameplayCamPos"][0] = gp.x; d["GameplayCamPos"][1] = gp.y; d["GameplayCamPos"][2] = gp.z;
+		d["GameplayCamRot"][0] = gr.x; d["GameplayCamRot"][1] = gr.y; d["GameplayCamRot"][2] = gr.z;
+	}
+	d["ReplayInit"]  = UNK1::_0xDF4B952F7D381B95() != 0;
+	d["ReplayAvail"] = UNK1::_0x4282E08174868BE3() != 0;
+	d["ReplaySpace"] = UNK1::_0x33D47E85B476ABCD(TRUE) != 0;
 	d["ScenarioGen"] = (int)m_scenarioGen;
 	d["EgoHealth"] = haveV ? ENTITY::GET_ENTITY_HEALTH(v) : 0;
 	d["EgoEngineHealth"] = haveV ? VEHICLE::GET_VEHICLE_ENGINE_HEALTH(v) : 0.0f;
@@ -821,7 +895,7 @@ void DataExport::exportEgoState() {
 // worldGetAllVehicles sweep and a handful of getters, on the same frame cadence
 // as everything else here.
 void DataExport::exportTrafficReaction() {
-	Vehicle ego = (m_ownVehicle != NULL) ? (*m_ownVehicle) : NULL;
+	Vehicle ego = egoHandle();
 	if (ego == NULL || !ENTITY::DOES_ENTITY_EXIST(ego)) return;
 	Vector3 ep = ENTITY::GET_ENTITY_COORDS(ego, false);
 
@@ -878,7 +952,7 @@ void DataExport::exportTrafficReaction() {
 }
 
 void DataExport::exportRoadContext() {
-	Vehicle v = (m_ownVehicle != NULL) ? (*m_ownVehicle) : NULL;
+	Vehicle v = egoHandle();
 	if (v == NULL || !ENTITY::DOES_ENTITY_EXIST(v)) {
 		d["RoadNodeValid"] = false;
 		d["RoadNodeDist"] = 0.0;

@@ -327,6 +327,100 @@ class SetEgoDrivingMode:
         return json.dumps({'SetEgoDrivingMode': self.__dict__})
 
 
+class StartRender:
+    """Start the capture loop in RENDER mode: no scenario, no ego of our own.
+
+    For re-rendering a Rockstar Editor .clip. The plugin keeps sending frames
+    and poses; the camera rides the render target once SetRenderTarget has
+    locked one, and until then it is whatever camera the replay shows.
+    `dataset` is the same Dataset message Start takes (frame size, rate...).
+    """
+
+    def __init__(self, dataset=None):
+        self.dataset = dataset if dataset is not None else Dataset()
+
+    def to_json(self):
+        return json.dumps({'StartRender': {'dataset': self.dataset.__dict__}})
+
+
+class ReplayControl:
+    """Drive the Rockstar Editor from outside.
+
+    action  "editor"      ACTIVATE_ROCKSTAR_EDITOR -- opens the Editor frontend
+            "reset"       RESET_EDITOR_VALUES
+            "fadein"      DO_SCREEN_FADE_IN(a ms) -- needed after leaving the Editor
+            "input"       hold frontend control id `a` at value `b` for `frames`
+                          frames (group 2 / FRONTEND: ACCEPT=201 CANCEL=202
+                          UP=188 DOWN=187 LEFT=189 RIGHT=190 PAUSE=199 X=203 Y=204)
+            "scriptcams"  RENDER_SCRIPT_CAMS(a > 0.5)
+            "timescale"   SET_TIME_SCALE(a)
+    """
+
+    def __init__(self, action="editor", a=0.0, b=0.0, frames=0):
+        self.action = str(action)
+        self.a = float(a)
+        self.b = float(b)
+        self.frames = int(frames)
+
+    def to_json(self):
+        return json.dumps({'ReplayControl': self.__dict__})
+
+
+class SetRenderTarget:
+    """Lock the render camera onto the closest vehicle to (x, y, z) within
+    `radius` metres once one exists -- the replayed ego, located from where the
+    original poses.jsonl began. radius <= 0 releases the target (replay camera)."""
+
+    def __init__(self, x=0.0, y=0.0, z=0.0, radius=0.0):
+        self.x, self.y, self.z, self.radius = float(x), float(y), float(z), float(radius)
+
+    def to_json(self):
+        return json.dumps({'SetRenderTarget': self.__dict__})
+
+
+class SetCapturePause:
+    """Whether the plugin wraps each frame capture in SET_GAME_PAUSED.
+
+    ⚠ The Rockstar Editor's replay recorder latches on that native: once the
+    capture loop has paused the game even once, no clip saves for the rest of
+    the game process ("Clips must be at least 3 seconds long", regardless of
+    length). A run that records .clip files captures with SET_TIME_SCALE(0)
+    alone. Default in the plugin is True (upstream behaviour).
+    """
+
+    def __init__(self, enabled=True):
+        self.enabled = bool(enabled)
+
+    def to_json(self):
+        return json.dumps({'SetCapturePause': self.__dict__})
+
+
+class SetClipRecording:
+    """Drive the Rockstar Editor's recorder around a clip.
+
+    action  "start"   begin recording (mode is the native's argument; the
+                      client verifies via the per-frame `clip_recording` flag
+                      rather than trusting the mode's documented meaning)
+            "save"    stop and write the .clip into the Editor's library
+            "discard" stop and throw it away
+
+    The .clip lands in the Editor's own library directory, unnamed; the capture
+    client matches it to the clip it belongs to by watching that directory.
+    """
+
+    def __init__(self, action="start", mode=1, control=-1, group=0, frames=3):
+        self.action = str(action)
+        self.mode = int(mode)
+        # "press": hold input `control` of `group` at 1.0 for `frames` frames --
+        # emulating a key, e.g. the Editor's own start/stop-recording shortcut.
+        self.control = int(control)
+        self.group = int(group)
+        self.frames = int(frames)
+
+    def to_json(self):
+        return json.dumps({'SetClipRecording': self.__dict__})
+
+
 class SetSceneDensity:
     """Ambient traffic / pedestrian density multipliers.
 

@@ -473,6 +473,8 @@ void Scenario::config(const Value& sc, const Value& dc) {
 }
 
 void Scenario::run() {
+	applyPendingControl();
+	if (running && m_renderMode) { runRenderMode(); return; }
 	if (running) {
 
 		// [longtail] Hard invariants first, every frame, before anything else can
@@ -526,6 +528,9 @@ void Scenario::run() {
 void Scenario::stop() {
 	if (!running) return;
 	running = false;
+	m_renderMode = false;
+	exporter.setRenderMode(false);
+	exporter.setRenderTarget(0);
 	CAM::DESTROY_ALL_CAMS(TRUE);
 	CAM::RENDER_SCRIPT_CAMS(FALSE, TRUE, 500, FALSE, FALSE);
 	AI::CLEAR_PED_TASKS(ped);
@@ -1533,6 +1538,162 @@ void Scenario::setEgoDrivingMode(int drivingMode, float setSpeed) {
 	m_leashStrikes = 0;
 	m_leashActive = false;
 	if (drivingMode >= 0) AI::TASK_VEHICLE_DRIVE_WANDER(ped, m_ownVehicle, setSpeed, egoDrivingModeOnRoad());
+}
+
+
+// [longtail] Rockstar Editor clip recording.
+//
+// A .clip is the game's own recording of the scene -- entity states, not
+// pixels -- which the Rockstar Editor can replay in-engine later from any
+// camera. Recording one alongside every captured clip makes the mp4 optional:
+// the scene can be re-rendered afterwards at a different resolution or from a
+// different mount without capturing it again.
+//
+// The natives sit in the header's UNK1 namespace under stale names. By hash,
+// as the current native databases name them:
+//   0xC3AC2FFF9612AC81  START_REPLAY_RECORDING(int mode)   header: _SET_RECORDING_MODE
+//   0x071A5197D6AFC8B3  STOP_REPLAY_RECORDING()            header: _STOP_RECORDING_AND_SAVE_CLIP
+//   0x88BB3507ED41A240  CANCEL_REPLAY_RECORDING()          header: _STOP_RECORDING_AND_DISCARD_CLIP
+//   0x644546EC5287471B  SAVE_REPLAY_RECORDING() -> BOOL    header: _0x644546EC5287471B
+//   0x1897CA71995A90B4  IS_REPLAY_RECORDING()
+//
+// ★ Measured on 1.0.3889.0, and the two modes behave differently:
+//   mode 0 = MANUAL (the F1 recording). START records; SAVE_REPLAY_RECORDING
+//            writes the clip (returns 1) and, called in the same tick as STOP,
+//            stops it too. STOP on its own DROPS the buffer -- a real discard.
+//            STOP-then-SAVE on separate ticks saves nothing: that ordering is
+//            why "mode 0 does not work" was believed for a while.
+//   mode 1 = ACTION REPLAY. STOP saves, CANCEL saves too, and the recorder
+//            flushes 30 s (of rendered time) segments, so a 15 s clip captured
+//            at 1/3 speed comes out as two files.
+// Mode 0 is used. Files land in Documents\Rockstar Games\GTA V\videos\clips\
+// as <Mon>-<DD>-<YYYY>-Clip-NNNN.clip (+ .jpg thumbnail), named by the game.
+// ⚠⚠ Whatever the mode, the recorder never saves again in a process once it
+// has seen SET_GAME_PAUSED -- "Clips must be at least 3 seconds long",
+// regardless of length. See m_pauseForCapture in DataExport: with recording
+// on, the capture cycle freezes time with SET_TIME_SCALE(0) alone.
+void Scenario::setClipRecording(const std::string& action, int mode, int control, int group, int frames) {
+	log("Scenario::setClipRecording " + action + " mode=" + std::to_string(mode) +
+	    (control >= 0 ? " control=" + std::to_string(control) + " group=" + std::to_string(group) : ""));
+	if (action == "start") {
+		UNK1::_SET_RECORDING_MODE(mode);                       // START_REPLAY_RECORDING
+	} else if (action == "save") {
+		// Manual mode: STOP and SAVE in the same tick -- stops AND writes.
+		if (UNK1::_IS_RECORDING()) {
+			UNK1::_STOP_RECORDING_AND_SAVE_CLIP();               // STOP_REPLAY_RECORDING
+			const int r = (int)UNK1::_0x644546EC5287471B();     // SAVE_REPLAY_RECORDING
+			log("[longtail] clip: stop+save, SAVE_REPLAY_RECORDING returned " + std::to_string(r), true);
+		} else log("[longtail] clip: save requested but not recording", true);
+	} else if (action == "discard") {
+		// Manual mode: STOP alone drops the buffer. (Action-replay mode would
+		// save here instead; the client deletes anything that turns up.)
+		if (UNK1::_IS_RECORDING()) UNK1::_STOP_RECORDING_AND_SAVE_CLIP();
+	} else if (action == "press") {
+		// Emulate a key: hold the control for a few frames so just-pressed edges
+		// register. Applied from Scenario::run() in every mode.
+		m_pendingControl = control;
+		m_pendingControlGroup = group;
+		m_pendingControlValue = 1.0f;
+		m_pendingControlFrames = frames > 0 ? frames : 3;
+	} else if (action == "status") {
+		log("[longtail] clip: replay initialized=" + std::to_string(UNK1::_0xDF4B952F7D381B95() != 0) +
+		    " available=" + std::to_string(UNK1::_0x4282E08174868BE3() != 0) +
+		    " space=" + std::to_string(UNK1::_0x33D47E85B476ABCD(TRUE) != 0) +
+		    " recording=" + std::to_string(UNK1::_IS_RECORDING() != 0), true);
+	} else {
+		log("[longtail] clip: unknown action " + action, true);
+	}
+}
+
+
+// ============================================================================
+// [rockstar] Render mode: capture a Rockstar Editor replay
+// ============================================================================
+//
+// There is no native that plays a given .clip. What exists: ACTIVATE_ROCKSTAR_EDITOR
+// (0x49DA8145672B2725) opens the Editor's frontend, and frontend controls can be
+// injected per frame, so the client drives the Editor's menus blind, looking at
+// the frames it gets back. Once a replay is playing, this mode keeps the capture
+// loop alive with no scenario: the camera rides a render TARGET -- the replayed
+// ego, found as the closest vehicle to where the original poses.jsonl began --
+// with the same seat mount and the user's offset, or, with no target, whatever
+// camera the replay is showing.
+
+void Scenario::startRender(const Value& dc) {
+	log("Scenario::startRender", true);
+	parseDatasetConfig(dc, true);
+	m_renderMode = true;
+	exporter.setRenderMode(true);
+	exporter.setRenderTarget(0);
+	m_targetWanted = false;
+	m_pendingControl = -1;
+	// A cam of our own exists so a target can be followed; until one is locked
+	// the replay's camera renders (script cams off).
+	exporter.initialize();
+	CAM::RENDER_SCRIPT_CAMS(FALSE, FALSE, 0, TRUE, TRUE);
+	running = true;
+	lastSafetyCheck = std::clock();
+}
+
+void Scenario::replayControl(const std::string& action, float a, float b, int frames) {
+	log("Scenario::replayControl " + action + " a=" + std::to_string(a) + " b=" + std::to_string(b) +
+	    " frames=" + std::to_string(frames), true);
+	if (action == "editor") {
+		UNK2::_0x49DA8145672B2725();                          // ACTIVATE_ROCKSTAR_EDITOR
+	} else if (action == "reset") {
+		UNK2::_0x3353D13F09307691();                          // RESET_EDITOR_VALUES
+	} else if (action == "fadein") {
+		CAM::DO_SCREEN_FADE_IN((int)a);
+	} else if (action == "input") {
+		// Held for `frames` frames from runRenderMode(): frontend menus read
+		// just-pressed edges, so a single-frame set is often missed.
+		m_pendingControl = (int)a;
+		m_pendingControlGroup = 2;
+		m_pendingControlValue = b;
+		m_pendingControlFrames = frames > 0 ? frames : 3;
+	} else if (action == "scriptcams") {
+		CAM::RENDER_SCRIPT_CAMS(a > 0.5f ? TRUE : FALSE, FALSE, 0, TRUE, TRUE);
+	} else if (action == "timescale") {
+		GAMEPLAY::SET_TIME_SCALE(a);
+		exporter.setResumeTimeScale(a);
+	} else {
+		log("[longtail] replay: unknown action " + action, true);
+	}
+}
+
+void Scenario::setRenderTarget(float x, float y, float z, float radius) {
+	m_targetX = x; m_targetY = y; m_targetZ = z; m_targetRadius = radius;
+	m_targetWanted = radius > 0.0f;
+	if (!m_targetWanted) { exporter.setRenderTarget(0); CAM::RENDER_SCRIPT_CAMS(FALSE, FALSE, 0, TRUE, TRUE); }
+	log("Scenario::setRenderTarget wanted=" + std::to_string(m_targetWanted), true);
+}
+
+void Scenario::applyPendingControl() {
+	// Injected input, held for the requested number of frames. ⚠ Runs even when
+	// no scenario is active, so a key can be emulated on an idle game too.
+	if (m_pendingControl >= 0) {
+		CONTROLS::_SET_CONTROL_NORMAL(m_pendingControlGroup, m_pendingControl, m_pendingControlValue);
+		if (--m_pendingControlFrames <= 0) m_pendingControl = -1;
+	}
+}
+
+void Scenario::runRenderMode() {
+	// Lock onto the replayed ego once a vehicle shows up near the requested point.
+	if (m_targetWanted && !exporter.renderTarget()) {
+		Vehicle v = VEHICLE::GET_CLOSEST_VEHICLE(m_targetX, m_targetY, m_targetZ, m_targetRadius, 0, 70);
+		if (v && ENTITY::DOES_ENTITY_EXIST(v)) {
+			exporter.setRenderTarget(v);
+			CAM::RENDER_SCRIPT_CAMS(TRUE, FALSE, 0, TRUE, TRUE);
+			log("[longtail] render: locked target vehicle " + std::to_string(v), true);
+		}
+	}
+	// A target that vanished (replay ended / scrubbed) is released; the loop
+	// falls back to the replay camera rather than a stale handle.
+	if (exporter.renderTarget() && !ENTITY::DOES_ENTITY_EXIST(exporter.renderTarget())) {
+		exporter.setRenderTarget(0);
+		CAM::RENDER_SCRIPT_CAMS(FALSE, FALSE, 0, TRUE, TRUE);
+		log("[longtail] render: target vehicle gone", true);
+	}
 }
 
 

@@ -38,7 +38,7 @@ for _p in (os.path.join(_REPO, "VPilot"), os.path.join(_REPO, "VPilot", "longtai
     if os.path.isdir(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
 
-from .manifest import CLIPS_DIRNAME, KEPT_FILES, entry_from_meta, utc_now_iso
+from .manifest import CLIPS_DIRNAME, KEPT_FILES, entry_from_meta, kept_files_in, utc_now_iso
 
 #: Pending clips past which submit() complains. Encoding is allowed to lag
 #: capture briefly -- a burst of long clips, a slow disk -- but a queue that
@@ -92,14 +92,13 @@ def _kept_files(clip_dir):
     """
     rel_root = os.path.join(CLIPS_DIRNAME, os.path.basename(os.path.normpath(clip_dir)))
     files, n_bytes = [], 0
-    for name in KEPT_FILES:
+    for name in kept_files_in(clip_dir):
         p = os.path.join(clip_dir, name)
-        if os.path.exists(p):
-            files.append(os.path.join(rel_root, name).replace(os.sep, "/"))
-            try:
-                n_bytes += os.path.getsize(p)
-            except OSError:
-                pass
+        files.append(os.path.join(rel_root, name).replace(os.sep, "/"))
+        try:
+            n_bytes += os.path.getsize(p)
+        except OSError:
+            pass
     return files, n_bytes
 
 
@@ -377,6 +376,35 @@ class Finalizer(object):
                 shutil.rmtree(os.path.join(clip_dir, "frames"), ignore_errors=True)
             return self._entry(clip_dir, meta, created_utc, kept=True)
 
+        keep_frames = bool(getattr(self.settings, "keep_frames", False))
+        rclip = meta.get("rockstar_clip") if isinstance(meta.get("rockstar_clip"), dict) else None
+        has_clip = os.path.exists(os.path.join(clip_dir, "clip.clip"))
+
+        if not bool(getattr(self.settings, "make_mp4", True)):
+            # ★ mp4 off: the deliverable is poses.jsonl + meta.json, plus clip.clip
+            #   when the Editor saved one and frames/ when keep_frames is on. There
+            #   is no frame-for-frame verification to fail here -- the mp4 was the
+            #   thing being verified -- so the only work is pruning.
+            if not keep_frames:
+                shutil.rmtree(os.path.join(clip_dir, "frames"), ignore_errors=True)
+            self._merge_meta(clip_dir, meta, None, delivered={
+                "mp4": False, "frames": keep_frames, "rockstar_clip": has_clip})
+            files, n_bytes = _kept_files(clip_dir)
+            entry = self._entry(clip_dir, meta, created_utc, kept=True,
+                                files=files, n_bytes=n_bytes)
+            entry["video"] = None
+            entry["rockstar_clip"] = has_clip
+            if keep_frames:
+                entry["has_frames_dir"] = True
+            _log("keep %s (%s) %d frames, %.1fs, %.0f MB, no mp4%s%s"
+                 % (clip_id, entry.get("label") or "?", entry.get("frames") or 0,
+                    entry.get("duration_s") or 0.0, n_bytes / 1e6,
+                    ", clip.clip" if has_clip else
+                    (", ⚠ NO .clip: %s" % (rclip or {}).get("reason", "not recorded")
+                     if getattr(self.settings, "record_clip", False) else ""),
+                    " (frames kept)" if keep_frames else ""))
+            return entry
+
         cfg = self._generator_config()
         image_format = _sniff_image_format(clip_dir, meta, cfg)
         n_frames = len(glob.glob(os.path.join(clip_dir, "frames", "*." + image_format)))
@@ -411,15 +439,16 @@ class Finalizer(object):
         # rather than dumping the caller's dict: the caller may hold a trimmed
         # copy, and overwriting meta.json with it would destroy the intrinsics,
         # scenario and placement records that only exist in the file.
-        self._merge_meta(clip_dir, meta, video)
+        self._merge_meta(clip_dir, meta, video, delivered={
+            "mp4": True, "frames": keep_frames, "rockstar_clip": has_clip})
 
-        keep_frames = bool(getattr(self.settings, "keep_frames", False))
         if not keep_frames:
             shutil.rmtree(os.path.join(clip_dir, "frames"), ignore_errors=True)
 
         files, n_bytes = _kept_files(clip_dir)
         entry = self._entry(clip_dir, meta, created_utc, kept=True,
                             files=files, n_bytes=n_bytes)
+        entry["rockstar_clip"] = has_clip
         entry["video"] = {"timing": video.get("timing"),
                           "sampling_hz_min": video.get("sampling_hz_min"),
                           "sampling_hz_max": video.get("sampling_hz_max"),
@@ -433,7 +462,7 @@ class Finalizer(object):
         return entry
 
     # ------------------------------------------------------------------
-    def _merge_meta(self, clip_dir, meta, video):
+    def _merge_meta(self, clip_dir, meta, video, delivered=None):
         path = os.path.join(clip_dir, "meta.json")
         on_disk = None
         try:
@@ -445,6 +474,11 @@ class Finalizer(object):
             on_disk = dict(meta)
         on_disk["video"] = video
         meta["video"] = video
+        if delivered is not None:
+            # What this folder is meant to hold, so a later reconcile() can tell
+            # "mp4 was never requested" from "mp4 failed to encode".
+            on_disk["delivered"] = delivered
+            meta["delivered"] = delivered
         tmp = path + ".tmp"
         # Atomic: a crash mid-write would otherwise leave a truncated meta.json,
         # and by this point the frames it describes are about to be deleted.

@@ -182,6 +182,33 @@ void Server::checkRecvMessage() {
 			const Value& ed = d["SetEgoDrivingMode"];
 			scenario.setEgoDrivingMode(ed["drivingMode"].GetInt(), ed["setSpeed"].GetFloat());
 		}
+		else if (d.HasMember("StartRender")) {
+			printf("StartRender received\n");
+			scenario.startRender(d["StartRender"]["dataset"]);
+			clientStarted = true;
+		}
+		else if (d.HasMember("ReplayControl")) {
+			const Value& rc = d["ReplayControl"];
+			scenario.replayControl(std::string(rc["action"].GetString()),
+				rc.HasMember("a") ? rc["a"].GetFloat() : 0.0f,
+				rc.HasMember("b") ? rc["b"].GetFloat() : 0.0f,
+				rc.HasMember("frames") ? rc["frames"].GetInt() : 0);
+		}
+		else if (d.HasMember("SetRenderTarget")) {
+			const Value& rt = d["SetRenderTarget"];
+			scenario.setRenderTarget(rt["x"].GetFloat(), rt["y"].GetFloat(), rt["z"].GetFloat(), rt["radius"].GetFloat());
+		}
+		else if (d.HasMember("SetCapturePause")) {
+			scenario.setCapturePause(d["SetCapturePause"]["enabled"].GetBool());
+		}
+		else if (d.HasMember("SetClipRecording")) {
+			const Value& cr = d["SetClipRecording"];
+			scenario.setClipRecording(std::string(cr["action"].GetString()),
+				cr.HasMember("mode") ? cr["mode"].GetInt() : 1,
+				cr.HasMember("control") ? cr["control"].GetInt() : -1,
+				cr.HasMember("group") ? cr["group"].GetInt() : 0,
+				cr.HasMember("frames") ? cr["frames"].GetInt() : 3);
+		}
 		else if (d.HasMember("SetSceneDensity")) {
 			const Value& sd = d["SetSceneDensity"];
 			scenario.setSceneDensity(sd["vehicle"].GetFloat(), sd["randomVehicle"].GetFloat(),
@@ -267,9 +294,14 @@ void Server::checkSendMessage() {
 	string data = messageJSON.GetString();
 
 	// Send Image TODO
-	int len = scenario.exporter.screenCapturer->length;
-	UINT8 * pixels = scenario.exporter.screenCapturer->pixels;
-	socket.send(zmq::buffer(pixels, len));
+	// [rockstar] Frames off: an empty frame message, and no capturer needed.
+	ScreenCapturer* cap = scenario.exporter.screenCapturer;
+	if (scenario.exporter.captureFrames() && cap != NULL) {
+		socket.send(zmq::buffer(cap->pixels, cap->length));
+	} else {
+		zmq::message_t empty;
+		socket.send(empty, zmq::send_flags::sndmore);
+	}
 
 	// Send JSON
 	socket.send(zmq::buffer(data), zmq::send_flags::none);
