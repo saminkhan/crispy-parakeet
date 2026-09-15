@@ -327,6 +327,28 @@ class SetEgoDrivingMode:
         return json.dumps({'SetEgoDrivingMode': self.__dict__})
 
 
+class SetEgoSpeed:
+    """Command the ego's speed without re-tasking it.
+
+    SetEgoDrivingMode also carries a speed, but it clears the ped's tasks and
+    issues a fresh wander task, so using it to change speed throws away the route
+    the ego was on. This one sets the AI driver's cruise target in place.
+
+    `applyNow` additionally assigns the vehicle's forward velocity outright. ⚠ That
+    is an instantaneous change of momentum: it is legitimate as a clip's INITIAL
+    condition (the capture client sends it just before recording starts, so the
+    first recorded frame is the commanded speed) and illegitimate mid-clip, where
+    it would put a physically impossible step into the pose track.
+    """
+
+    def __init__(self, setSpeed=15.0, applyNow=False):
+        self.setSpeed = float(setSpeed)
+        self.applyNow = bool(applyNow)
+
+    def to_json(self):
+        return json.dumps({'SetEgoSpeed': self.__dict__})
+
+
 class SetSceneDensity:
     """Ambient traffic / pedestrian density multipliers.
 

@@ -43,7 +43,8 @@ import numpy as np
 
 from deepgtav.messages import (
     Config, Dataset, PrepareLocation, Scenario as GtaScenario,
-    SetActorBehaviour, SetCameraPositionAndRotation, SetClockTime, SetSceneDensity,
+    SetActorBehaviour, SetCameraPositionAndRotation, SetClockTime, SetEgoSpeed,
+    SetSceneDensity,
     SetSurvivalMode, SeedScene, SetCameraMount, SetIgniteWrecks, SetRoadLeash,
     SetTimeScale, SetWeather, frame2numpy,
 )
@@ -124,6 +125,22 @@ class Ctx:
     def sample_ttc(self):
         return self.rng.uniform(self.cfg.ttc_min, self.cfg.ttc_max)
 
+    def trigger_speed(self, low, high):
+        """The speed a scenario's trigger commands the ego to, m/s.
+
+        ⚠ A scenario's own range is a property of the manoeuvre (run a red at
+        22-34, plough a junction at 24-36), but it is NOT more authoritative than
+        a speed the user asked for. With ego_speed pinned, the trigger would
+        otherwise override the command halfway through every clip and the
+        setting would only describe the first few seconds.
+
+        One draw either way, so the behaviour stream stays aligned and a scene
+        remains reproducible whether or not a speed was pinned.
+        """
+        if getattr(self.cfg, "ego_speed_enforce", False):
+            low, high = self.cfg.ego_speed_min, self.cfg.ego_speed_max
+        return self.rng.uniform(low, high)
+
 
 class EpisodeRunner:
     def __init__(self, client, cfg, rng, bias=None):
@@ -191,6 +208,9 @@ class EpisodeRunner:
             "minute": rng.randrange(60),
             "vehicle": rng.choice(cfg.ego_vehicles),
             "speed": rng.uniform(cfg.ego_speed_min, cfg.ego_speed_max),
+            # ⚠ With ego_speed pinned, min == max and this returns the command --
+            # still one draw, so the behaviour stream stays aligned either way.
+            "speed_enforced": bool(getattr(cfg, "ego_speed_enforce", False)),
             "style": style,
             "style_bits": style_bits,
             "restraint": round(ds.restraint_score(style), 3),
@@ -246,6 +266,9 @@ class EpisodeRunner:
             style, style_bits = ds.NORMAL, ["NORMAL"]
         return {
             "speed": rng.uniform(cfg.ego_speed_min, cfg.ego_speed_max),
+            # ⚠ With ego_speed pinned, min == max and this returns the command --
+            # still one draw, so the behaviour stream stays aligned either way.
+            "speed_enforced": bool(getattr(cfg, "ego_speed_enforce", False)),
             "style": style,
             "style_bits": style_bits,
             "restraint": round(ds.restraint_score(style), 3),
@@ -607,6 +630,14 @@ class EpisodeRunner:
         # [longtail] road containment. Counted over delivered frames only: the
         # lead is discarded, and the ego is still road-snapping during it.
         offroad_frames = inclip_frames = 0
+        enforce_speed = bool(getattr(self.cfg, "ego_speed_enforce", False))
+        speed_asserted = False
+        speed_assert = None       # recorded in meta.timing when enforcement is on
+        # ⚠ Not `lead` itself: the message is a round trip through the socket and
+        # the plugin applies it on its next tick, so asking at the boundary lands
+        # it a frame or two INSIDE the clip. Ask early enough to be in force by
+        # frame 0, late enough that the ego cannot shed it again.
+        assert_speed_at = max(0.0, lead - float(getattr(self.cfg, "ego_speed_assert_lead_s", 0.3)))
         last_onroad_t = 0.0
         road_dists = []
         prev_pos = prev_t = None
@@ -647,6 +678,37 @@ class EpisodeRunner:
             # impact" and rejected it -- sane driving being rejected for being sane.
             if state.get("at_traffic_light"):
                 last_moving_t = t
+
+            # ★ A speed the user ASKED for is asserted as the clip's initial
+            # condition, a little before the lead ends so the plugin has applied
+            # it by the first recorded frame. Without this the command only ever
+            # described the spawn: measured over 14 clips, the first recorded
+            # frame ran at a median 0.49x of the commanded speed, because the ego
+            # spends the lead braking for whatever the scenario put in front of it.
+            # ⚠ Once, and never after recording starts -- it assigns momentum, so
+            # a second one would put an impossible step into the pose track.
+            # ⚠⚠ ... and never into a car that has STOPPED. Correcting drift (the
+            # driver eased from 22 to 17 during the lead) is a starting condition;
+            # shoving 22 m/s into a car something has already halted is a ram the
+            # tool manufactured. One scene did exactly that in three of its four
+            # variations: the ego was blocked within the lead, the assertion
+            # slammed it into the obstacle, and three "collisions" were recorded
+            # that no driver caused. A stopped ego stays stopped and the stuck
+            # detector judges the spawn, as it would have without the command.
+            if enforce_speed and not speed_asserted and t >= assert_speed_at:
+                speed_asserted = True
+                speed_before = float(state.get("speed", 0.0))
+                if speed_before >= cfg.ego_speed_assert_min_mps:
+                    ctx.send(SetEgoSpeed(setSpeed=env["speed"], applyNow=True))
+                    speed_assert = {"sent": True, "at_s": round(t, 3),
+                                    "speed_before": round(speed_before, 2)}
+                else:
+                    speed_assert = {"sent": False, "at_s": round(t, 3),
+                                    "speed_before": round(speed_before, 2),
+                                    "skipped": "ego at %.1f m/s (< %.1f) when the "
+                                               "assertion was due: stopped, not "
+                                               "drifting -- not asserted into"
+                                               % (speed_before, cfg.ego_speed_assert_min_mps)}
 
             # Everything before the lead is captured (so the world settles and the
             # ego reaches speed) but never written.
@@ -887,6 +949,7 @@ class EpisodeRunner:
                             "offroad_dist_m": cfg.offroad_dist_m,
                             "leash_dist_m": cfg.road_leash_dist_m},
             "timing": dict(warm, requested_duration_s=round(duration, 3),
+                           speed_assert=speed_assert,
                            out_of_order_messages=out_of_order,
                            slowmo=slowmo,
                            slowmo_scale=cfg.slowmo_scale if slowmo else 1.0),

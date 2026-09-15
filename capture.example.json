@@ -10,6 +10,7 @@
   "max_hours": 0.0,
   "clips_per_lifetime": 12,
   "chaos": 0.8,
+  "ego_speed": null,
   "variations": "counterfactual",
   "deterministic_population": "auto",
   "graphics": "high",

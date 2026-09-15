@@ -53,7 +53,7 @@ out in [SETUP.md](SETUP.md#counterfactual-variations).
 
 ## Configuration
 
-Eighteen keys in one JSON file — resolution, frame rate, clip length, graphics
+Nineteen keys in one JSON file — resolution, frame rate, clip length, graphics
 preset, how many clips you want, and a single `chaos` dial from 0.0 to 1.0 that
 moves some thirty underlying knobs together, from calm lawful traffic to dense
 aggressive traffic with crowds crossing in front of the car. An optional
@@ -61,6 +61,14 @@ aggressive traffic with crowds crossing in front of the car. An optional
 so one scene can be captured with the ego and the other road users each sane or
 reckless while everything else about the scene is held fixed. See
 [SETUP.md](SETUP.md#step-6--write-your-settings-file).
+
+Individual knobs can also be lifted out of the `chaos` dial and commanded directly.
+`ego_speed` (or `--ego-speed 22`, `--ego-speed 14-30`) fixes how fast the ego is
+told to drive, holds the staged incidents to that number instead of their own, and
+asserts it at the frame recording starts — so speed becomes a control variable held
+across a scene's variations rather than one more thing chaos moved. ⚠ It commands
+the entry speed and the driver's target; the driving style, the traffic and the road
+still own what happens afterwards.
 
 ## Layout
 

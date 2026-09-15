@@ -166,6 +166,7 @@ public:
 	void taskVehicleTempAction(int actorId, int action, int durationMs);
 	void taskVehicleDriveToCoord(int actorId, float x, float y, float z, float speed, int drivingMode);
 	void setEgoDrivingMode(int drivingMode, float setSpeed);
+	void setEgoSpeed(float setSpeed, bool applyNow);
 	bool resolveActor(int actorId, Vehicle& vehOut, Ped& pedOut);
 
 	// [longtail] ambient density + capture time scale

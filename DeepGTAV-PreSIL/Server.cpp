@@ -182,6 +182,11 @@ void Server::checkRecvMessage() {
 			const Value& ed = d["SetEgoDrivingMode"];
 			scenario.setEgoDrivingMode(ed["drivingMode"].GetInt(), ed["setSpeed"].GetFloat());
 		}
+		else if (d.HasMember("SetEgoSpeed")) {
+			const Value& es = d["SetEgoSpeed"];
+			scenario.setEgoSpeed(es["setSpeed"].GetFloat(),
+				es.HasMember("applyNow") ? es["applyNow"].GetBool() : false);
+		}
 		else if (d.HasMember("SetSceneDensity")) {
 			const Value& sd = d["SetSceneDensity"];
 			scenario.setSceneDensity(sd["vehicle"].GetFloat(), sd["randomVehicle"].GetFloat(),

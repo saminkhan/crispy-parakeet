@@ -434,6 +434,15 @@ void Scenario::buildScenario() {
 	for (int i = 0; i < 600 && !ENTITY::HAS_COLLISION_LOADED_AROUND_ENTITY(m_ownVehicle); i++)
 		WAIT(0);
 	VEHICLE::SET_VEHICLE_ON_GROUND_PROPERLY(m_ownVehicle);
+	// [longtail] ⚠ Re-assert the spawn speed HERE, not only where it was set above.
+	// That assignment is made while collision is still streaming: this loop can
+	// spin for hundreds of frames, SET_VEHICLE_ON_GROUND_PROPERLY then re-settles
+	// the car, and the velocity does not survive either. Measured over 14 clips,
+	// the ego reached the end of warmup at a median 0.71x of the speed it was told
+	// to spawn at, and the first RECORDED frame at 0.49x. One native call.
+	if (!stationaryScene && _setSpeed > 0.0f) {
+		VEHICLE::SET_VEHICLE_FORWARD_SPEED(m_ownVehicle, _setSpeed);
+	}
 	// Ambient traffic fills faster with the low-priority generators on.
 	VEHICLE::SET_ALL_LOW_PRIORITY_VEHICLE_GENERATORS_ACTIVE(TRUE);
 
@@ -1533,6 +1542,35 @@ void Scenario::setEgoDrivingMode(int drivingMode, float setSpeed) {
 	m_leashStrikes = 0;
 	m_leashActive = false;
 	if (drivingMode >= 0) AI::TASK_VEHICLE_DRIVE_WANDER(ped, m_ownVehicle, setSpeed, egoDrivingModeOnRoad());
+}
+
+
+// [longtail] Change the ego's commanded speed WITHOUT re-tasking it.
+//
+// setEgoDrivingMode() above is the only other way a client can change _setSpeed,
+// and it clears the ped's tasks first -- correct when the style changes, wasteful
+// when only the speed does, because the wander route goes with it.
+// SET_DRIVE_TASK_CRUISE_SPEED edits the running task in place.
+//
+// ⚠ Cruise speed is a TARGET. The driver still obeys its style bits, its
+// aggressiveness and whatever is in front of it, so this raises the ceiling it
+// drives toward; it does not pin the speedometer. `applyNow` is the part that
+// binds, and it binds for exactly one instant.
+void Scenario::setEgoSpeed(float setSpeed, bool applyNow) {
+	log("Scenario::setEgoSpeed");
+	_setSpeed = setSpeed;
+	if (!ENTITY::DOES_ENTITY_EXIST(m_ownVehicle)) return;
+	if (ENTITY::DOES_ENTITY_EXIST(ped)) {
+		AI::SET_DRIVE_TASK_CRUISE_SPEED(ped, setSpeed);
+		AI::SET_DRIVE_TASK_MAX_CRUISE_SPEED(ped, setSpeed);
+	}
+	// ⚠ Assigns momentum outright. The client sends this only just before a clip
+	// starts recording, where it is the clip's initial condition; sending it
+	// mid-clip would write a physically impossible step into the pose track.
+	if (applyNow && setSpeed > 0.0f) {
+		VEHICLE::SET_VEHICLE_ENGINE_ON(m_ownVehicle, TRUE, TRUE, FALSE);
+		VEHICLE::SET_VEHICLE_FORWARD_SPEED(m_ownVehicle, setSpeed);
+	}
 }
 
 

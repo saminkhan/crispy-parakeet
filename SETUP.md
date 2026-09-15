@@ -217,6 +217,7 @@ edit the values in place, do not replace the whole file with just this:
 | `target_clips` | `0` | How many clips to make. `0` means keep going until you stop it. |
 | `clip_duration_s` | `15.0` | Length of each finished clip, in seconds. |
 | `chaos` | `0.8` | How eventful the scenes are, from `0.0` to `1.0`. See below. |
+| `ego_speed` | `null` | How fast your car is told to drive, in metres per second. `null` lets `chaos` decide. See below. |
 | `graphics` | `"high"` | `low`, `medium`, `high`, or `ultra`. Lower is faster. |
 | `width` / `height` | `1920` / `1080` | Video resolution. |
 | `rate_hz` | `30` | Frames captured per second of in-game time. |
@@ -235,6 +236,51 @@ near-misses are set up to be. `0.8` is a good starting point.
 ⚠ **Higher chaos is not strictly better.** At `1.0` almost every clip ends in a
 collision, so you get very few clips of ordinary driving or near-misses. If you want
 a mix, run several batches at different `chaos` values into different `output_dir`s.
+
+### Setting your car's speed
+
+Leave `ego_speed` as `null` and `chaos` decides it: a calm run picks 10–18 m/s per
+clip, a chaotic one 16–34. Set it yourself when you want speed to be a **fixed
+quantity** rather than one more thing that varies — for example to capture the same
+junction at 10, 20 and 30 m/s and compare, or to hold speed steady while behaviour
+changes across variations.
+
+Speeds are in **metres per second** (multiply by 3.6 for km/h, so 22 m/s ≈ 79 km/h).
+
+```json
+  "ego_speed": 22,
+```
+
+You can also give a range to sample from, `"ego_speed": [14, 30]`, and you can set
+it from the command line without editing the file at all:
+
+```bash
+python3 run_capture.py --config capture.json --ego-speed 22
+python3 run_capture.py --config capture.json --ego-speed 14-30
+python3 run_capture.py --config capture.json --ego-speed 80kph
+python3 run_capture.py --config capture.json --ego-speed auto     # back to chaos
+```
+
+Setting a speed does two extra things beyond picking the number. Your car is put at
+that speed **at the moment recording starts**, rather than only when it spawns a few
+seconds earlier — otherwise it spends those seconds braking for traffic and the clip
+begins at roughly half the speed you asked for. And the staged incidents, which
+normally command their own speed when they fire (a red-light run wants 22–34 m/s),
+are held to your number instead, so the setting describes the whole clip rather than
+just the start of it.
+
+One exception: if your car has come to a stop before recording starts — blocked by a
+vehicle, at a red light, already crashed — it is left stopped. Pushing it to speed
+from a standstill would just ram it into whatever stopped it, and that collision
+would be the tool's doing, not the driver's. `meta.json` records whether the speed
+was asserted (`timing.speed_assert`) and how fast the car was going at that moment.
+
+⚠ **It is a command, not a guarantee.** It sets the speed your car starts at and the
+speed its driver aims for. After that the driving style, the traffic and the road
+decide: a lawful car told to do 30 m/s still stops at red lights, and any car will
+slow for the vehicle in front of it. Watch the `speed` field in `poses.jsonl` to see
+what actually happened. Speeds above 60 m/s are refused — the game's driver cannot
+hold a city road at those speeds and every clip becomes a crash into the first bend.
 
 ### Counterfactual variations
 

@@ -103,7 +103,7 @@ class EgoRunsRedLight(Scenario):
     min_ego_speed = 6.0
 
     def trigger(self, ctx):
-        speed = ctx.rng.uniform(22.0, 34.0)
+        speed = ctx.trigger_speed(22.0, 34.0)
         ctx.send(SetEgoDrivingMode(drivingMode=ds.IGNORE_LIGHTS, setSpeed=speed))
         return {"style": "IGNORE_LIGHTS", "target_speed": speed}
 
@@ -116,7 +116,7 @@ class EgoIntoCrossTraffic(Scenario):
     min_ego_speed = 6.0
 
     def trigger(self, ctx):
-        speed = ctx.rng.uniform(24.0, 36.0)
+        speed = ctx.trigger_speed(24.0, 36.0)
         ctx.send(SetEgoDrivingMode(drivingMode=ds.PLOUGH_THROUGH, setSpeed=speed))
         return {"style": "PLOUGH_THROUGH", "target_speed": speed}
 
@@ -141,7 +141,7 @@ class EgoWrongWay(Scenario):
 
     def trigger(self, ctx):
         mode = ds.AGGRESSIVE_PRESETS["wrong_way"]
-        speed = ctx.rng.uniform(18.0, 30.0)
+        speed = ctx.trigger_speed(18.0, 30.0)
         ctx.send(SetEgoDrivingMode(drivingMode=mode, setSpeed=speed))
         return {"style": "wrong_way", "target_speed": speed}
 
@@ -313,7 +313,7 @@ class StalledObstacle(Scenario):
         return {"actor_ids": self.actors, "count": n, "base_forward": base}
 
     def trigger(self, ctx):
-        speed = ctx.rng.uniform(20.0, 32.0)
+        speed = ctx.trigger_speed(20.0, 32.0)
         ctx.send(SetEgoDrivingMode(drivingMode=ds.PLOUGH_THROUGH, setSpeed=speed))
         return {"ego_style": "PLOUGH_THROUGH", "target_speed": speed}
 
@@ -348,7 +348,7 @@ class EmergencyScene(Scenario):
         return {"actor_ids": self.actors, "scene_forward": fwd}
 
     def trigger(self, ctx):
-        speed = ctx.rng.uniform(16.0, 26.0)
+        speed = ctx.trigger_speed(16.0, 26.0)
         ctx.send(SetEgoDrivingMode(drivingMode=ds.RUSHED, setSpeed=speed))
         return {"ego_style": "RUSHED", "target_speed": speed}
 
@@ -370,7 +370,7 @@ class PedestrianHazard(Scenario):
         return {"count": n, "spawn_forward": fwd}
 
     def trigger(self, ctx):
-        speed = ctx.rng.uniform(16.0, 28.0)
+        speed = ctx.trigger_speed(16.0, 28.0)
         ctx.send(SetEgoDrivingMode(drivingMode=ds.PLOUGH_THROUGH, setSpeed=speed))
         return {"ego_style": "PLOUGH_THROUGH", "target_speed": speed}
 

@@ -39,6 +39,7 @@ import time
 from .finalize import Finalizer
 from .game import Game
 from .manifest import Manifest
+from .settings import parse_ego_speed
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.dirname(_HERE)
@@ -208,6 +209,24 @@ def override_variations(settings, spec):
                 % (spec, ", ".join(sorted(presets)) or "(none defined)"))
     # Copies, not the shared preset table: validate() and callers may adjust.
     settings.variations = [dict(v) for v in presets[spec]]
+    return None
+
+
+def override_ego_speed(settings, spec):
+    """Apply a command-line `--ego-speed` value. Returns an error string or None.
+
+    Parsed here rather than stored raw so a bad value fails at the prompt, next to
+    the thing the user typed, instead of inside validate() under a config-file
+    heading that names a file they did not edit.
+    """
+    try:
+        parse_ego_speed(spec)
+    except ValueError as exc:
+        return str(exc)
+    # Stored as typed: parse_ego_speed() is idempotent and to_generator_config()
+    # re-runs it, so the settings object keeps the user's own spelling for the
+    # dry-run report and for anything that serialises it.
+    settings.ego_speed = spec
     return None
 
 
@@ -988,6 +1007,26 @@ def dry_run(settings):
     print("[capture] chaos     %s    graphics %s    crf %s    keep_frames %s"
           % (settings.chaos, settings.graphics, settings.video_crf,
              settings.keep_frames))
+
+    # The resolved speed, not the raw setting: "80kph" and [12, 18] both reach the
+    # generator as m/s, and the number that matters is the one it gets.
+    try:
+        span = parse_ego_speed(settings.ego_speed)
+    except ValueError as exc:
+        span, speed_note = None, "invalid (%s)" % exc
+    else:
+        if span is None:
+            base = settings.to_generator_config()
+            speed_note = ("auto: %.0f-%.0f m/s from chaos %s, sampled per clip"
+                          % (base["ego_speed_min"], base["ego_speed_max"], settings.chaos))
+        elif span[0] == span[1]:
+            speed_note = ("%.1f m/s (%.0f km/h), pinned and enforced at each clip's "
+                          "first frame" % (span[0], span[0] * 3.6))
+        else:
+            speed_note = ("%.1f-%.1f m/s (%.0f-%.0f km/h), sampled per clip and "
+                          "enforced at each clip's first frame"
+                          % (span[0], span[1], span[0] * 3.6, span[1] * 3.6))
+    print("[capture] ego speed %s" % speed_note)
 
     # The plan is needed before the target line: it decides the lifetime size.
     # Its failure is reported as a problem rather than a traceback, like the rest.

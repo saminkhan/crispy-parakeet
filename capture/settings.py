@@ -518,6 +518,75 @@ def _xml_value(v):
     return str(v)
 
 
+#: Speed unit suffixes a CLI user may reasonably type. The settings object and
+#: every field downstream are m/s; these exist so "30" and "108kph" cannot be
+#: confused for each other at the prompt.
+_SPEED_UNITS = [
+    ("km/h", 1.0 / 3.6), ("kmh", 1.0 / 3.6), ("kph", 1.0 / 3.6),
+    ("mph", 0.44704),
+    ("m/s", 1.0), ("mps", 1.0), ("ms", 1.0),
+]
+
+
+def parse_ego_speed(spec):
+    """Normalise an `ego_speed` value to (low, high) m/s, or None for "auto".
+
+    Accepts what a config file holds (a number, a [low, high] pair, null) and what
+    a command line offers ("22", "14-30", "14:30", "80kph", "50mph",
+    "auto"). Raises ValueError with a message meant to be shown as-is.
+    """
+    if spec is None:
+        return None
+    if isinstance(spec, bool):                      # bool is an int; reject early
+        raise ValueError("ego_speed must be a speed or a [low, high] pair, got %r" % (spec,))
+    if isinstance(spec, (int, float)):
+        lo = hi = float(spec)
+    elif isinstance(spec, (list, tuple)):
+        if len(spec) != 2 or not all(_is_number(v) for v in spec):
+            raise ValueError("ego_speed as a range must be two numbers [low, high], "
+                             "got %r" % (spec,))
+        lo, hi = float(spec[0]), float(spec[1])
+    elif isinstance(spec, str):
+        text = spec.strip().lower().replace(" ", "")
+        if text in ("", "auto", "none", "off", "default"):
+            return None
+        scale = 1.0
+        for suffix, factor in _SPEED_UNITS:
+            if text.endswith(suffix):
+                text, scale = text[:-len(suffix)], factor
+                break
+        # ⚠ Split on the LAST separator, not the first: a lone "-" is also the
+        # sign of a negative number, and "14-30" must not become ("", "14", "30").
+        parts = re.split(r"[-:]", text.strip("-:"))
+        try:
+            if len(parts) == 1:
+                lo = hi = float(parts[0]) * scale
+            elif len(parts) == 2:
+                lo, hi = float(parts[0]) * scale, float(parts[1]) * scale
+            else:
+                raise ValueError
+        except ValueError:
+            raise ValueError("cannot read %r as a speed; use \"22\" (m/s), "
+                             "\"14-30\" for a range, a \"kph\"/\"mph\" suffix, "
+                             "or \"auto\" for the chaos-scaled default" % (spec,))
+    else:
+        raise ValueError("ego_speed must be a number, a [low, high] pair or a string, "
+                         "got %r" % (spec,))
+
+    if lo <= 0 or hi <= 0:
+        raise ValueError("ego_speed must be greater than 0 m/s, got %r" % (spec,))
+    if lo > hi:
+        raise ValueError("ego_speed low (%.1f) is above high (%.1f) m/s" % (lo, hi))
+    # ⚠ Not a taste limit. The wander task's cruise speed is a target for GTA's AI
+    # driver, and above roughly this the driver cannot hold a city road at all --
+    # the clip becomes a crash into the first corner, which is not the long tail
+    # anyone is asking for. Ask for it deliberately by raising this.
+    if hi > 60.0:
+        raise ValueError("ego_speed %.1f m/s (%.0f km/h) is beyond what the AI "
+                         "driver holds on a road; 60 m/s is the ceiling" % (hi, hi * 3.6))
+    return (lo, hi)
+
+
 @dataclass
 class CaptureSettings:
     """Everything a user is expected to set. Two paths are mandatory."""
@@ -531,6 +600,19 @@ class CaptureSettings:
     discard_lead_s: float = 2.0
     target_clips: int = 0          # 0 = run until stopped
     chaos: float = 0.8             # 0.0..1.0
+
+    #: Ego speed command, m/s. None/"auto" leaves it to `chaos` (the EGO table
+    #: below interpolates a 10-18 m/s envelope at calm to 16-34 at full chaos).
+    #: A number pins every clip to that speed; [low, high] samples the range.
+    #: ★ An explicit value also makes the pipeline ENFORCE it: the velocity is
+    #: re-asserted at the first recorded frame rather than only at spawn, so the
+    #: clip starts at the speed that was asked for instead of whatever survived
+    #: the discard lead. Measured without it: the first recorded frame ran at a
+    #: median 0.49x the commanded speed.
+    #: ⚠ It commands the ENTRY speed and the AI driver's cruise target, not the
+    #: whole clip. Restraint bits, driver aggressiveness, traffic and corners all
+    #: still apply afterwards, and a lawful ego at 30 m/s will still stop at a red.
+    ego_speed: object = None
     graphics: str = "high"         # "low"|"medium"|"high"|"ultra"
     video_crf: int = 16
     keep_frames: bool = False
@@ -718,6 +800,11 @@ class CaptureSettings:
             p.append("chaos must be between 0.0 (calm, lawful, sparse) and 1.0 "
                      "(the tuned max-chaos settings), got %r" % (self.chaos,))
 
+        try:
+            parse_ego_speed(self.ego_speed)
+        except ValueError as exc:
+            p.append(str(exc))
+
         if self.graphics not in _GRAPHICS_PRESETS:
             p.append("graphics %r is not a known preset; use one of: %s"
                      % (self.graphics, ", ".join(GRAPHICS_PRESETS)))
@@ -780,6 +867,23 @@ class CaptureSettings:
         d.update(_scale_knobs(_SCENE, self.chaos))
         d.update(_scale_knobs(_EGO, self.chaos if ego_chaos is None else ego_chaos))
         d.update(_scale_knobs(_ACTOR, self.chaos if actor_chaos is None else actor_chaos))
+
+        # ★ An explicit ego_speed overrides the EGO table AFTER the interpolation,
+        #   for every variation. That is the point of it: with speed pinned, a
+        #   scene's counterfactuals differ in behaviour at a held speed, so speed
+        #   is a control variable instead of another thing chaos moved.
+        span = parse_ego_speed(self.ego_speed)
+        if span is not None:
+            lo, hi = span
+            d["ego_speed_min"] = lo
+            d["ego_speed_max"] = hi
+            # The cruise target the AI driver aims for between events. Midpoint of
+            # the range; the same number when it is a pin.
+            d["ego_cruise_speed"] = (lo + hi) / 2.0
+            # Tells the capture client the speed was ASKED for rather than sampled,
+            # which is what licenses re-asserting it at the first recorded frame.
+            d["ego_speed_enforce"] = True
+
         dp = self.deterministic_population
         if isinstance(dp, str) and dp.lower() == "auto":
             dp = bool(self.variations)

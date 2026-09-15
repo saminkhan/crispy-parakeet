@@ -428,9 +428,113 @@ def test_variations_share_scene():
 
 print("variations-share-scene test passed.")
 
+def test_ego_speed_command():
+    """A commanded ego speed (capture.json `ego_speed` / --ego-speed) must reach
+    the clip as an initial condition, not merely as a spawn request.
+
+    Three things are the contract:
+      * exactly ONE SetEgoSpeed per clip -- it assigns momentum, so a second one
+        would write a physically impossible step into the pose track;
+      * it carries the commanded speed with applyNow set;
+      * it goes out BEFORE the first recorded frame, which is the whole point:
+        asserted after, it would be an unexplained jump in the data instead of
+        the clip's starting condition.
+    """
+    import json as _json, shutil as _shutil
+    import config as cfgmod, coverage, episode
+
+    out = tempfile.mkdtemp(prefix="speedtest_")
+    try:
+        COMMAND = 22.0
+        cfg = cfgmod.CaptureConfig(width=64, height=36,
+                                   clip_seconds_min=6.0, clip_seconds_max=6.0,
+                                   discard_lead_s=3.0,
+                                   warmup_seconds_min=0.0, warmup_seconds_max=1.0,
+                                   warmup_min_speed=0.0, out_dir=out,
+                                   image_format="png",
+                                   ego_speed_min=COMMAND, ego_speed_max=COMMAND,
+                                   ego_cruise_speed=COMMAND, ego_speed_enforce=True)
+
+        class StampingPlugin(FakePlugin):
+            """FakePlugin that remembers the game clock at each send."""
+
+            def __init__(self, *a, **kw):
+                FakePlugin.__init__(self, *a, **kw)
+                self.sent_at_ms = []
+
+            def sendMessage(self, m):
+                self.sent_at_ms.append((type(m).__name__, self.t_ms))
+                return FakePlugin.sendMessage(self, m)
+
+        plugin = StampingPlugin(warm_frames=5)
+        runner = episode.EpisodeRunner(plugin, cfg, random.Random(7))
+        sampler = coverage.CoverageSampler(os.path.join(out, "spd.json"), seed=7)
+        x, y, region = sampler.propose()
+        meta = runner.run_clip(x, y, region, out)
+
+        asserts = [m for m in plugin.messages if type(m).__name__ == "SetEgoSpeed"]
+        assert len(asserts) == 1, "expected 1 SetEgoSpeed, got %d" % len(asserts)
+        assert asserts[0].applyNow is True, "the assertion must apply the velocity"
+        assert abs(asserts[0].setSpeed - COMMAND) < 1e-6, (
+            "SetEgoSpeed carried %.3f, commanded %.3f" % (asserts[0].setSpeed, COMMAND))
+        assert abs(meta["environment"]["speed"] - COMMAND) < 1e-6, (
+            "a pinned range must sample to the pin, got %r" % meta["environment"]["speed"])
+        assert meta["environment"]["speed_enforced"] is True
+
+        sent_ms = [ms for name, ms in plugin.sent_at_ms if name == "SetEgoSpeed"][0]
+        rows = [_json.loads(l) for l in
+                open(os.path.join(out, "clips", meta["clip_id"], "poses.jsonl"))]
+        assert rows, "no frames written"
+        first_ms = rows[0]["game_time_ms"]
+        assert sent_ms < first_ms, (
+            "SetEgoSpeed went out at t=%d ms, at or after the first recorded frame "
+            "(%d ms): it would show as a jump in the data, not a starting condition"
+            % (sent_ms, first_ms))
+
+        # And the other half: a scenario trigger must not overrule the command.
+        # Tested directly, so the assertion does not depend on which scenario the
+        # sampler happened to pick.
+        ctx = episode.Ctx(plugin, cfg, random.Random(1))
+        for _ in range(20):
+            got = ctx.trigger_speed(30.0, 40.0)     # a range far above the pin
+            assert abs(got - COMMAND) < 1e-6, (
+                "trigger_speed returned %.2f; a pinned ego_speed must win over a "
+                "scenario's own range" % got)
+        loose = cfgmod.CaptureConfig(ego_speed_enforce=False)
+        free = episode.Ctx(plugin, loose, random.Random(1))
+        assert 30.0 <= free.trigger_speed(30.0, 40.0) <= 40.0, (
+            "without a command the scenario's own range must still apply")
+
+        ta = meta["timing"]["speed_assert"]
+        assert ta and ta["sent"] is True and ta["speed_before"] >= cfg.ego_speed_assert_min_mps
+
+        # ⚠ And never INTO a stopped car. A fake that crashes to a standstill
+        # early in the lead must see no assertion at all: shoving the command at
+        # a car something has already halted manufactures a collision.
+        halted = StampingPlugin(warm_frames=5, crash_at=10)
+        runner2 = episode.EpisodeRunner(halted, cfg, random.Random(8))
+        x2, y2, region2 = sampler.propose()
+        meta2 = runner2.run_clip(x2, y2, region2, out)
+        assert not [m for m in halted.messages if type(m).__name__ == "SetEgoSpeed"], (
+            "SetEgoSpeed was sent into an ego that had stopped during the lead")
+        ta2 = meta2["timing"]["speed_assert"]
+        assert ta2 and ta2["sent"] is False and "skipped" in ta2, ta2
+        assert ta2["speed_before"] < cfg.ego_speed_assert_min_mps
+
+        print("ego-speed command test passed.")
+        print("  commanded %.1f m/s -> sampled %.1f, asserted once at %d ms, "
+              "first recorded frame %d ms"
+              % (COMMAND, meta["environment"]["speed"], sent_ms, first_ms))
+        print("  halted ego: assertion skipped at %.1f m/s (%s)"
+              % (ta2["speed_before"], ta2["skipped"][:40] + "..."))
+    finally:
+        _shutil.rmtree(out, ignore_errors=True)
+
+
 if __name__ == "__main__":
     # ⚠ Kept OUT of module scope on purpose: anything importing this file for
     # FakePlugin (the determinism review does) must not execute the test suite
     # as a side effect of the import.
     test_discard_lead()
     test_variations_share_scene()
+    test_ego_speed_command()

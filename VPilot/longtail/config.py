@@ -94,6 +94,27 @@ class CaptureConfig:
     ego_speed_min: float = 11.0
     ego_speed_max: float = 30.0
 
+    #: The speed above was ASKED for (capture.json `ego_speed` / --ego-speed), not
+    #: sampled from the chaos envelope. ★ When true the clip re-asserts it at the
+    #: first recorded frame instead of trusting the spawn assignment to survive the
+    #: discard lead -- measured at a median 0.49x of the command without it, since
+    #: the ego spends the lead braking for whatever is in front of it.
+    #: ⚠ This is an initial condition, not a governor: it is applied once, at the
+    #: frame the recording starts, so no recorded frame pair shows an unphysical
+    #: jump. Afterwards the AI driver, the style bits and traffic own the speed.
+    ego_speed_enforce: bool = False
+
+    #: How far before the end of the discard lead the enforced speed is asserted,
+    #: seconds. The message is a socket round trip applied on the plugin's next
+    #: tick, so asserting at the boundary itself lands it inside the clip.
+    ego_speed_assert_lead_s: float = 0.3
+    #: ⚠ The assertion is skipped when the ego is slower than this (m/s) at the
+    #: moment it is due. A car that has come to a stop during the lead was stopped
+    #: by something -- an obstacle, a red light, a collision -- and assigning it
+    #: 22 m/s is a ram the tool caused, not a starting condition. Same threshold
+    #: as warmup_min_speed: "meaningfully driving".
+    ego_speed_assert_min_mps: float = 3.0
+
     #: ⚠ Upstream collapsed both of these to a driver who never takes a risk
     #: (aggressiveness 0.0) and never makes a mistake (ability 100.0). Inverting
     #: them is the cheapest long-tail source in the system and needs no actors.
