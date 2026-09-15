@@ -1009,10 +1009,15 @@ def dry_run(settings):
                                   "" if lib else "  ⚠"))
     else:
         print("[capture] clips     Rockstar Editor recording off")
-    print("[capture] mp4       %s" % (
-        "encoded in the background (clip.mp4)" if settings.make_mp4 else
-        "off -- render later from clip.clip with render_clip.py"
-        + ("" if settings.record_clip or settings.keep_frames else "  ⚠ and no frames kept")))
+    if settings.make_mp4:
+        mp4_note = "encoded in the background (clip.mp4)"
+    elif settings.record_clip:
+        mp4_note = "off -- render later from clip.clip with render_clip.py"
+    elif settings.keep_frames:
+        mp4_note = "off -- raw frames are kept instead (encode them yourself later)"
+    else:
+        mp4_note = "off  ⚠ and no .clip and no frames: nothing visual would be kept"
+    print("[capture] mp4       %s" % mp4_note)
     print("[capture] frames    %s" % (
         "captured (%s)" % ", ".join(n for n, on in (("mp4", settings.make_mp4),
                                                     ("keep_frames", settings.keep_frames)) if on)
